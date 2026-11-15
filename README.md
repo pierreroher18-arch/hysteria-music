@@ -1,22 +1,16 @@
 # Hysteria
 
-Appli de suivi du groupe : répertoire (pochettes, tempo, tonalité, niveau de chacun), setlists de concert avec transitions, click intégré, agenda des dispos et inventaire du matos. Tout est synchronisé entre Achille, Quentin, Mathieu et Pierre.
+Appli de suivi du groupe : répertoire (pochettes, tempo, tonalité, accordage, capo, niveau de chacun, accords et paroles affichés dans la fiche (avec transposition), liens vers accords, tablatures et paroles, grille du groupe), setlists de concert avec transitions, intermèdes et durée prévue, mode scène (défilement automatique, chrono, verrouillage) et version imprimable, click intégré, agenda des dispos (avec dispos récurrentes et ajout à l'agenda du téléphone), inventaire du matos et fiche technique imprimable, boîte à idées de morceaux avec votes, carnet de contacts, fil d'activité, bouton Annuler et mode nuit. Tout est synchronisé entre Achille, Quentin, Matthieu et Pierre.
 
-## Mise en ligne (une seule fois, environ 5 min)
+## Mise en ligne
 
-L'appli a besoin d'une petite fonction serveur pour partager les données, donc on passe par GitHub plutôt que par le glisser-déposer Netlify.
+Tous les fichiers sont à plat (aucun dossier) : Netlify les range lui-même au moment de la mise en ligne.
 
-1. Sur github.com, crée un nouveau dépôt (par exemple `hysteria`, il peut être privé).
-2. Dans le dépôt vide, clique sur « uploading an existing file » et glisse **le contenu** du dossier dézippé : `public`, `netlify`, `netlify.toml`, `package.json`, `package-lock.json`. Valide avec « Commit changes ».
-3. Sur app.netlify.com : « Add new project », puis « Import an existing project », choisis GitHub et le dépôt `hysteria`. Ne change aucun réglage et clique sur « Deploy ».
-4. Une fois le déploiement terminé, envoie l'adresse du site aux trois autres. Chacun choisit son prénom à la première ouverture.
+1. Sur github.com, crée un dépôt et clique sur « uploading an existing file ».
+2. Glisse tous les fichiers de ce dossier, puis « Commit changes ».
+3. Sur app.netlify.com : « Add new project », « Import an existing project », GitHub, choisis le dépôt, puis « Deploy » sans rien changer.
+4. Envoie l'adresse en .netlify.app aux trois autres. Chacun choisit son prénom à la première ouverture.
 
-Astuce : sur iPhone, Partager puis « Sur l'écran d'accueil » pour l'avoir comme une appli.
-
-## Code d'accès (facultatif)
-
-Par défaut, toute personne qui a le lien peut modifier. Pour ajouter un code :
-Netlify, puis « Project configuration », « Environment variables », ajoute `BAND_CODE` avec le code de ton choix, puis relance un déploiement (« Deploys », « Trigger deploy »). L'appli demandera le code à chacun une fois.
 
 ## Modifier l'appli plus tard
 
@@ -24,7 +18,14 @@ Change les fichiers dans le dépôt GitHub : Netlify redéploie tout seul. Les d
 
 ## Contenu
 
-- `public/` : l'appli (HTML, CSS, JS)
-- `public/shared.mjs` : la setlist de départ et la logique de modification des données
-- `netlify/functions/state.mjs` : la fonction qui lit et écrit les données partagées (Netlify Blobs)
-- `netlify/functions/search.mjs` : la recherche de morceaux et de pochettes (Deezer, iTunes en secours), sans clé à configurer
+- `index.html`, `app.js`, `style.css` : l'appli
+- `shared.mjs` : le répertoire de départ et la logique de modification des données
+- `state.mjs` : la fonction qui lit et écrit les données partagées (Netlify Blobs)
+- `search.mjs` : la recherche de morceaux et de pochettes (Deezer, iTunes en secours), sans clé à configurer
+- `cover.mjs` : relais des pochettes, pour que la fiche d'un morceau prenne la couleur de sa pochette
+- `chords.mjs` : la grille d'accords avec paroles, récupérée à la demande sur Ultimate Guitar (version la mieux notée), rien n'est stocké
+- `lyrics.mjs` : les paroles seules (LRCLIB, base libre), utilisées quand aucune grille d'accords n'est trouvée
+- `ics.mjs` : le fichier d'agenda (.ics) d'une répète ou d'un concert, avec un rappel la veille
+
+## Sauvegardes
+Le serveur garde une copie des données par jour (prise avant la première modif de la journée), pendant 30 jours. On les retrouve dans le profil (bouton avec ton prénom), rubrique Sauvegarde, avec un bouton pour télécharger une copie complète en fichier.

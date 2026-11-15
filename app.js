@@ -1,4 +1,4 @@
-import { MEMBERS, LEVELS, GEAR_CATS, DEFAULT_PLACE, TUNINGS, seedState, newId, applyOps, ytMusic } from './shared.mjs';
+import { MEMBERS, LEVELS, GEAR_CATS, DEFAULT_PLACE, TUNINGS, ROOTS, seedState, newId, applyOps, ytMusic } from './shared.mjs';
 
 /* ================= Utilitaires ================= */
 const $ = (s, el = document) => el.querySelector(s);
@@ -300,6 +300,11 @@ const ICON = {
   mail: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/></svg>',
   scroll: '<svg viewBox="0 0 24 24"><path d="M12 4v16M7 15l5 5 5-5"/></svg>',
   pause: '<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>',
+  sync: '<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.7M20 4v4.7h-4.7M20 12a8 8 0 0 1-13.7 5.6L4 15.3M4 20v-4.7h4.7"/></svg>',
+  image: '<svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 17l5-4.5 4 3.5 3-2.5 4 3.5"/></svg>',
+  dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></svg>',
+  ul: '<svg viewBox="0 0 24 24"><path d="M12 15.5v-11M7.5 9L12 4.5 16.5 9M5 19.5h14"/></svg>',
+  share: '<svg viewBox="0 0 24 24"><path d="M12 14V4M8 7.5l4-4 4 4M7 10.5H5.5v9h13v-9H17"/></svg>',
 };
 const PREVIEW = !!window.HYSTERIA_PREVIEW;
 const TABS = ['repertoire', 'setlist', 'planning', 'matos'];
@@ -373,6 +378,8 @@ const app = {
   planTab: LS.get('hy.planTab', 'agenda'),
   stage: null,
   wake: null,
+  img: null,
+  backups: null,
   lyrics: {},
   sheets: {},
 };
@@ -425,7 +432,7 @@ async function push() {
   if (app.mode === 'local' || app.sending || !app.pending.length) return;
   app.sending = true;
   renderHeader();
-  const batch = app.pending.slice();
+  const batch = app.pending.slice(0, 200);
   try {
     const r = await fetch(API, { method: 'POST', headers: headers(), body: JSON.stringify({ ops: batch }) });
     const res = await r.json();
@@ -938,6 +945,7 @@ function viewSetlist() {
     ${entries.length ? `<div class="sl-tools">
       <button class="btn small primary" data-act="stage-open">${ICON.stage}Mode scène</button>
       <button class="btn small" data-act="print-setlist">${ICON.print}Imprimer</button>
+      <button class="btn small" data-act="gig-image">${ICON.image}Image</button>
     </div>` : ''}
     ${entries.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Fais glisser ≡ pour changer l’ordre.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
     <div class="add-row add-two">
@@ -1116,7 +1124,7 @@ function viewPlanning() {
     <li class="ev${isPast ? ' past' : ''}" data-act="open-event" data-id="${esc(e.id)}" tabindex="0" role="button">
       ${dateBlock(e.date)}
       <div><div class="ev-title">${esc(evTitle(e))}${e.type === 'concert' ? '<span class="badge">Concert</span>' : ''}</div>
-        <div class="ev-sub">${esc(fmtWeekday.format(parseISO(e.date)))}${e.time ? ' à ' + fmtTime(e.time) : ''}${e.place ? ', ' + esc(e.place) : ''}${D('gigs')[e.gigId] ? ` · ${esc(D('gigs')[e.gigId].name)}` : ''}</div></div>
+        <div class="ev-sub">${esc(fmtWeekday.format(parseISO(e.date)))}${e.time ? ' à ' + fmtTime(e.time) : ''}${e.place ? ', ' + esc(e.place) : ''}${D('gigs')[e.gigId] ? ` · ${esc(D('gigs')[e.gigId].name)}` : ''}${e.type !== 'concert' && (e.prog || []).length ? ` · ${plural(e.prog.filter((id) => D('songs')[id]).length, 'morceau', 'morceaux')} au programme` : ''}</div></div>
       <div class="ev-count">${availOn(e.date).length}/${MEMBERS.length}<small>dispos</small></div>
     </li>`;
 
@@ -1551,6 +1559,8 @@ function renderSheet() {
     event: s.edit ? sheetEventEdit : sheetEvent,
     gig: sheetGig,
     'pick-songs': sheetPickSongs,
+    'pick-prog': sheetPickProg,
+    'gig-image': sheetGigImage,
     gear: sheetGear,
     'pick-gear': sheetPickGear,
     transition: sheetTransition,
@@ -1790,6 +1800,79 @@ async function fillCovers() {
 }
 
 /* ----- Dates ----- */
+/* ----- Programme de répète ----- */
+// Le concert qui suit une date (avec sa setlist) : ses morceaux passent en premier dans les propositions.
+function concertAfter(iso) {
+  return Object.values(D('events')).filter((e) => e.type === 'concert' && e.date >= iso && D('gigs')[e.gigId])
+    .sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+}
+function progWhy(s) {
+  const lv = s.levels || {};
+  const low = MEMBERS.filter((m) => (lv[m.id] || 0) < 3).map((m) => m.name);
+  if (!low.length) return 'presque prêt';
+  if (low.length === MEMBERS.length) return avgLevel(s) ? 'pas encore en place' : 'personne n’a commencé';
+  return 'à bosser : ' + low.join(', ');
+}
+// Propositions : d'abord les morceaux pas prêts de la prochaine setlist, puis ceux en cours, les moins avancés d'abord.
+function progSuggest(ev, max = 6) {
+  const songs = D('songs');
+  const inProg = new Set(ev.prog || []);
+  const c = concertAfter(ev.date);
+  const g = c && D('gigs')[c.gigId];
+  const inSet = new Set(g ? (g.songs || []).filter((id) => songs[id]) : []);
+  return Object.values(songs)
+    .filter((s) => !inProg.has(s.id) && avgLevel(s) < 4)
+    .map((s) => ({ s, set: inSet.has(s.id), avg: avgLevel(s) }))
+    .sort((a, b) => (b.set - a.set) || ((a.set ? a.avg : a.avg || 9) - (b.set ? b.avg : b.avg || 9)) || byTitle(a.s, b.s))
+    .slice(0, max)
+    .map((x) => ({ ...x, why: (x.set ? `setlist ${g.name} · ` : '') + progWhy(x.s) }));
+}
+function progSet(evId, fn) {
+  const ev = D('events')[evId];
+  if (!ev) return;
+  const songs = D('songs');
+  const before = (ev.prog || []).filter((id) => songs[id]);
+  const list = fn(before.slice());
+  const log = list.length > before.length ? logOps(`a préparé le programme de la répète du ${fmtShort.format(parseISO(ev.date))}`, 'prog:' + evId) : [];
+  commit([{ op: 'set', path: ['events', evId, 'prog'], value: list }, ...log]);
+}
+function progBlock(ev) {
+  const songs = D('songs');
+  const prog = (ev.prog || []).filter((id) => songs[id]).map((id) => songs[id]);
+  const sug = ev.date >= todayISO() ? progSuggest(ev) : [];
+  const total = prog.reduce((t, s) => t + (s.duration || AVG_SONG), 0);
+  return `
+    <h3 class="block-title">Programme${prog.length ? ` <span class="count">${prog.length}</span>` : ''}<span class="bt-right"><button class="link-btn" data-act="pick-prog" data-id="${esc(ev.id)}">Choisir</button></span></h3>
+    ${prog.length ? `<ol class="prog-list">${prog.map((s) => `
+      <li class="prog-row">${coverTile(s, 'sm')}<span class="pr-main"><span class="title">${esc(s.title)}</span><span class="pips">${pipsFor(s)}</span></span>
+        <button class="x" data-act="prog-del" data-ev="${esc(ev.id)}" data-id="${esc(s.id)}" aria-label="Retirer ${esc(s.title)}">${ICON.close}</button></li>`).join('')}</ol>
+      <div class="prog-foot"><span>~${fmtMin(total)} de jeu</span><button class="btn small primary" data-act="stage-prog" data-id="${esc(ev.id)}">${ICON.stage}Mode scène</button></div>`
+      : '<p class="empty-note" style="margin:0">Rien de prévu pour l’instant.</p>'}
+    ${sug.length ? `<div class="prog-sug-head"><span>Proposés d’après vos niveaux</span><button class="link-btn" data-act="prog-add-all" data-id="${esc(ev.id)}">Tout ajouter</button></div>
+      <ul class="prog-list sug">${sug.map(({ s, why }) => `
+        <li class="prog-row">${coverTile(s, 'sm')}<span class="pr-main"><span class="title">${esc(s.title)}</span><span class="why">${esc(why)}</span></span>
+          <button class="add" data-act="prog-add" data-ev="${esc(ev.id)}" data-id="${esc(s.id)}" aria-label="Ajouter ${esc(s.title)} au programme">${ICON.plus}</button></li>`).join('')}</ul>` : ''}`;
+}
+function sheetPickProg(s) {
+  const ev = D('events')[s.id];
+  if (!ev) return null;
+  const inProg = new Set((ev.prog || []).filter((id) => D('songs')[id]));
+  const q = draft('pick.q').trim().toLowerCase();
+  const list = songsList().filter((x) => !q || (x.title + ' ' + x.artist).toLowerCase().includes(q));
+  return `
+    ${sheetHead('Programme', `${esc(evTitle(ev))} du ${esc(fmtShort.format(parseISO(ev.date)))}, ${plural(inProg.size, 'morceau', 'morceaux')}`)}
+    <input class="search block-search" type="search" placeholder="Chercher dans le répertoire" data-draft="pick.q" data-rerender value="${esc(draft('pick.q'))}" aria-label="Chercher dans le répertoire">
+    <ul class="pick-list">${list.map((x) => `
+      <li><button class="pick-row with-cov" data-act="toggle-prog-song" data-id="${esc(x.id)}" aria-pressed="${inProg.has(x.id)}">
+        <span class="check-box">${ICON.check}</span>
+        ${coverTile(x, 'sm')}
+        <span class="pick-main"><span class="title">${esc(x.title)}</span><span class="artist">${esc(x.artist)}</span></span>
+        <span class="pick-meta pips">${pipsFor(x)}</span>
+      </button></li>`).join('') || '<p class="empty-note">Aucun morceau ne correspond.</p>'}
+    </ul>
+    <div class="sheet-foot"><button class="btn primary block" data-act="pick-prog-done">Terminé</button></div>`;
+}
+
 function sheetEvent(s) {
   const ev = D('events')[s.id];
   if (!ev) return null;
@@ -1807,6 +1890,7 @@ function sheetEvent(s) {
       return `<h3 class="block-title">Setlist</h3>
         <button class="linked-gig" data-act="open-gig" data-id="${esc(g.id)}"><b>${esc(g.name)}</b><span>${plural(ent.filter((e) => e.song).length, 'morceau', 'morceaux')}${total ? ` · ${fmtMin(total)}` : ''}</span>${ICON.next}</button>`;
     })() : ''}
+    ${ev.type !== 'concert' ? progBlock(ev) : ''}
     ${ev.notes ? `<h3 class="block-title">Infos</h3><p class="note-text" style="margin:0">${esc(ev.notes)}</p>` : ''}
     ${ev.date >= todayISO() ? (() => {
       const { ics, gcal } = calLinks(ev);
@@ -1993,6 +2077,7 @@ function sheetProfile() {
       ${[['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Nuit']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${app.theme === v}">${l}</button>`).join('')}
     </div>
     
+    ${backupBlock()}
     ${app.mode === 'local' ? `
       <h3 class="block-title">${PREVIEW ? 'Aperçu' : 'Mode local'}</h3>
       <p class="empty-note" style="margin:0 0 12px">Mode local : rien n’est partagé.</p>
@@ -2036,18 +2121,34 @@ function sheetActivity() {
 }
 
 /* ----- Mode scène ----- */
+// Ce qu'on joue en mode scène : une setlist, ou le programme d'une répète.
+function stageList(st) {
+  if (!st) return null;
+  if (st.evId) {
+    const ev = D('events')[st.evId];
+    if (!ev) return null;
+    const songs = D('songs');
+    return {
+      name: `${evTitle(ev)} du ${fmtShort.format(parseISO(ev.date))}`, kind: 'prog', transitions: {}, target: 0,
+      entries: (ev.prog || []).filter((id) => songs[id]).map((id) => ({ id, song: songs[id] })),
+    };
+  }
+  const g = D('gigs')[st.gigId];
+  return g ? { name: g.name, kind: 'gig', transitions: g.transitions || {}, target: Number(g.target) || 0, entries: gigEntries(g) } : null;
+}
+const stageSrc = (st) => (st.evId ? 'e:' + st.evId : 'g:' + st.gigId);
 function stageIds() {
-  const g = app.stage && D('gigs')[app.stage.gigId];
-  return g ? gigEntries(g).map((e) => e.id) : [];
+  const L = stageList(app.stage);
+  return L ? L.entries.map((e) => e.id) : [];
 }
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${pad(Math.floor(sec % 60))}`;
 function chronoElapsed(st) { return (st.acc || 0) + (st.t0 ? (Date.now() - st.t0) / 1000 : 0); }
 function chronoHtml(st) {
-  const g = D('gigs')[st.gigId];
-  const entries = g ? gigEntries(g) : [];
+  const L = stageList(st);
+  const entries = L ? L.entries : [];
   const left = entries.slice(st.idx).reduce((t, e) => t + (entrySecs(e) || (e.song ? AVG_SONG : 0)), 0);
   const el = chronoElapsed(st);
-  const target = Number(g && g.target) || 0;
+  const target = L ? L.target : 0;
   const end = el + left;
   let cls = '', extra = `reste ~${fmtMin(left)}`;
   if (target) {
@@ -2065,16 +2166,16 @@ function renderStage() {
     if (!el.hidden) { el.hidden = true; el.innerHTML = ''; }
     return;
   }
-  const g = D('gigs')[st.gigId];
-  const entries = g ? gigEntries(g) : [];
-  if (!g || !entries.length) { stageExit(); return; }
+  const L = stageList(st);
+  const entries = L ? L.entries : [];
+  if (!entries.length) { stageExit(); return; }
   st.idx = Math.max(0, Math.min(st.idx, entries.length - 1));
   const cur = entries[st.idx];
   const nextE = entries[st.idx + 1];
   const prevSong = entries.slice(0, st.idx).reverse().find((e) => e.song);
   const s = cur.song;
   const nxt = nextE && nextE.song;
-  const tr = s && nxt ? (g.transitions || {})[cur.id + '__' + nextE.id] : null;
+  const tr = s && nxt ? L.transitions[cur.id + '__' + nextE.id] : null;
   const playing = s && metro.playing && metro.songId === s.id;
   const tune = s ? tuningOf(s) : '';
   const tuneChanged = s && prevSong && tuningOf(prevSong.song) !== tune;
@@ -2123,8 +2224,8 @@ function renderStage() {
 
   let n = 0;
   const side = `
-    <aside class="st-side${st.side ? ' open' : ''}" aria-label="Déroulé du concert">
-      <div class="ss-head"><b>Déroulé</b><span>${esc(g.name)}</span><button class="st-mini ss-close" data-act="stage-side" aria-label="Fermer le déroulé">${ICON.close}</button></div>
+    <aside class="st-side${st.side ? ' open' : ''}" aria-label="${L.kind === 'prog' ? 'Programme' : 'Déroulé'}">
+      <div class="ss-head"><b>${L.kind === 'prog' ? 'Programme' : 'Déroulé'}</b><span>${esc(L.name)}</span><button class="st-mini ss-close" data-act="stage-side" aria-label="Fermer le déroulé">${ICON.close}</button></div>
       <ol class="ss-list">${entries.map((e, i) => {
         const cls = i < st.idx ? 'done' : i === st.idx ? 'now' : '';
         if (e.item) return `<li><button class="ss-row item ${cls}" data-act="stage-jump" data-i="${i}"><span class="ss-n">·</span><span class="ss-t">${esc(e.item.title)}</span><span class="ss-d">${e.item.dur ? esc(e.item.dur) + ' min' : ''}</span></button></li>`;
@@ -2154,7 +2255,10 @@ function renderStage() {
         <button class="st-mini" data-act="stage-zoom" data-v="-1" aria-label="Texte plus petit">A−</button>
         <button class="st-mini" data-act="stage-zoom" data-v="1" aria-label="Texte plus grand">A+</button>
       </span>
-      <button class="st-mini wide" data-act="stage-lock">${ICON.lock}Verrouiller</button>
+      <span class="st-group">
+        <button class="st-mini wide st-sync" data-act="stage-sync" aria-pressed="${!!st.sync && app.mode !== 'local'}" title="Quand quelqu’un change de morceau, tout le monde suit">${ICON.sync}Synchro</button>
+        <button class="st-mini wide" data-act="stage-lock">${ICON.lock}Verrouiller</button>
+      </span>
     </div>
     <div class="st-nav">
       <button data-act="stage-go" data-v="-1" ${st.idx ? '' : 'disabled'} aria-label="Précédent">${ICON.prev}Précédent</button>
@@ -2228,17 +2332,60 @@ async function keepAwake(on) {
     }
   } catch { app.wake = null; }
 }
-function stageGo(d) {
+function stageGo(d, remote) {
   const st = app.stage;
   if (!st) return;
   const ids = stageIds();
   const n = st.idx + d;
   if (n < 0 || n >= ids.length) return;
   st.idx = n;
+  if (!remote) liveSend();
   const s = D('songs')[ids[n]];
   if (st.auto && s && s.bpm) metro.start(s.id, s.bpm);
   else if (metro.playing) metro.stop();
   else renderStage();
+}
+// Synchro de la scène : chacun envoie le morceau où il passe, les autres suivent (relevé toutes les 1,5 s).
+function liveSend() {
+  const st = app.stage;
+  if (!st || !st.sync || app.mode === 'local') return;
+  const k = newId('k');
+  st.liveK = k;
+  fetch(API, { method: 'POST', headers: headers(), body: JSON.stringify({ live: { src: stageSrc(st), id: stageIds()[st.idx] || '', i: st.idx, by: app.me || '', k, t: Date.now() } }) }).catch(() => {});
+}
+async function livePull() {
+  const st = app.stage;
+  if (!st || !st.sync || app.mode === 'local' || livePull.busy) return;
+  livePull.busy = true;
+  try {
+    const r = await fetch(API + '?live=1', { headers: headers(), cache: 'no-store' });
+    if (!(r.headers.get('content-type') || '').includes('application/json')) return;
+    const { live } = await r.json();
+    const join = !st.joined;
+    st.joined = true;
+    if (!live || app.stage !== st || !st.sync || live.src !== stageSrc(st) || live.k === st.liveK) return;
+    st.liveK = live.k;
+    if (join && Date.now() - (Number(live.t) || 0) > 15 * 60000) return; // vieille position : on ne la reprend pas en arrivant
+    const ids = stageIds();
+    let n = ids.indexOf(live.id);
+    if (n < 0) n = Math.min(Number(live.i) || 0, ids.length - 1);
+    if (n < 0 || n === st.idx) return;
+    stageGo(n - st.idx, true);
+    const e = stageList(st).entries[n];
+    const what = e.song ? e.song.title : e.item.title;
+    toast(join ? `Tu rejoins le groupe : ${what}` : `${live.by ? memberName(live.by) : 'Le groupe'} passe à ${what}`);
+  } catch {} finally { livePull.busy = false; }
+}
+setInterval(() => { if (app.stage && document.visibilityState === 'visible') livePull(); }, 1500);
+function stageStart(src) {
+  if (metro.playing) metro.stop();
+  app.stage = { ...src, idx: 0, auto: LS.get('hy.stageAuto', false), lyrics: LS.get('hy.stageSheet', true), scroll: LS.get('hy.stageScroll', false), paused: false, zoom: LS.get('hy.stageZoom', 1), locked: false, pos: 0, sync: LS.get('hy.stageSync', true), joined: false };
+  document.body.style.overflow = 'hidden';
+  keepAwake(true);
+  renderStage();
+  livePull();
+  const q = $('#stage .st-nav [data-v="1"]');
+  if (q) q.focus({ preventScroll: true });
 }
 function stageExit() {
   if (!app.stage) return;
@@ -2275,6 +2422,198 @@ function printSetlist() {
     <div class="pr-foot">${plural(num, 'morceau', 'morceaux')}${total ? `, environ ${fmtMin(total)}` : ''}${g.target ? ` (prévu : ${esc(g.target)} min)` : ''}</div>`;
   if (PREVIEW) { toast('L’impression marche sur le site en ligne'); return; }
   window.print();
+}
+
+/* ----- Setlist en image (story ou post) ----- */
+const IMG_THEMES = {
+  brume: { bg: ['#c3cabe', '#eceee6'], ink: '#1d2119', dust: '#565e4e', line: 'rgba(29,33,25,.16)', acc: '#45543a' },
+  nuit: { bg: ['#0f110e', '#272c22'], ink: '#e7e9e0', dust: '#aab19d', line: 'rgba(231,233,224,.14)', acc: '#a9bb8c' },
+  mousse: { bg: ['#2f3b28', '#56683f'], ink: '#f4f3e8', dust: '#cfd7bf', line: 'rgba(244,243,232,.2)', acc: '#e8d58f' },
+};
+const IMG_DISPLAY = "Syne, Futura, 'Century Gothic', sans-serif";
+const IMG_BODY = "'Instrument Sans', system-ui, -apple-system, sans-serif";
+const slugify = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'setlist';
+function imgOpts() {
+  const o = LS.get('hy.img', {}) || {};
+  return { fmt: o.fmt === 'post' ? 'post' : 'story', theme: IMG_THEMES[o.theme] ? o.theme : 'brume', artists: o.artists !== false };
+}
+function imgData(g) {
+  const ev = gigEvent(g);
+  const date = (ev && ev.date) || g.date || '';
+  const bits = [date ? fmtDay.format(parseISO(date)) : '', ev && ev.time ? fmtTime(ev.time) : '', (ev && ev.place) || ''];
+  const songs = gigEntries(g).filter((e) => e.song).map((e) => e.song);
+  return { name: g.name || 'Setlist', line: bits.filter(Boolean).join(' · '), songs, secs: songs.reduce((t, x) => t + (x.duration || 0), 0) };
+}
+const imgKey = (g, o) => { const d = imgData(g); return JSON.stringify([o, d.name, d.line, d.songs.map((x) => [x.title, x.artist, x.duration])]); };
+function fitText(ctx, text, maxW) {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t.trimEnd() + '…';
+}
+function spacedWidth(ctx, text, sp) { let w = 0; for (const ch of text) w += ctx.measureText(ch).width + sp; return w - sp; }
+function drawSpaced(ctx, text, x, y, sp) { for (const ch of text) { ctx.fillText(ch, x, y); x += ctx.measureText(ch).width + sp; } }
+async function drawSetlistImage(g, o) {
+  const fonts = ['800 100px Syne', '700 60px Syne', '500 40px "Instrument Sans"', '700 40px "Instrument Sans"'];
+  drawSetlistImage.fonts = drawSetlistImage.fonts || Promise.race([Promise.all(fonts.map((f) => document.fonts.load(f))).catch(() => {}), new Promise((r) => setTimeout(r, 2500))]);
+  await drawSetlistImage.fonts;
+  const T = IMG_THEMES[o.theme];
+  const d = imgData(g);
+  const W = 1080, H = o.fmt === 'story' ? 1920 : 1350, P = 92;
+  const top = o.fmt === 'story' ? 240 : 100, bottom = o.fmt === 'story' ? H - 260 : H - 96;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const grd = x.createLinearGradient(0, 0, W * 0.5, H);
+  grd.addColorStop(0, T.bg[0]); grd.addColorStop(1, T.bg[1]);
+  x.fillStyle = grd; x.fillRect(0, 0, W, H);
+  x.textBaseline = 'alphabetic';
+
+  // Le nom du groupe sur toute la largeur.
+  x.font = `800 100px ${IMG_DISPLAY}`;
+  const wm = 100 * (W - 2 * P) / spacedWidth(x, 'HYSTERIA', 4);
+  x.font = `800 ${wm}px ${IMG_DISPLAY}`;
+  x.fillStyle = T.ink;
+  let y = top + wm * 0.74;
+  drawSpaced(x, 'HYSTERIA', P, y, wm * 0.04);
+
+  // Concert, date et lieu.
+  y += 34;
+  x.fillStyle = T.acc; x.fillRect(P, y, 64, 6);
+  let nf = 64;
+  x.font = `700 ${nf}px ${IMG_DISPLAY}`;
+  while (nf > 40 && x.measureText(d.name).width > W - 2 * P) { nf -= 2; x.font = `700 ${nf}px ${IMG_DISPLAY}`; }
+  y += 30 + nf * 0.95;
+  x.fillStyle = T.ink;
+  x.fillText(fitText(x, d.name, W - 2 * P), P, y);
+  if (d.line) {
+    x.font = `500 34px ${IMG_BODY}`; x.fillStyle = T.dust;
+    y += 54;
+    x.fillText(fitText(x, d.line, W - 2 * P), P, y);
+  }
+
+  // Les morceaux : une ou deux colonnes, taille ajustée à la place.
+  const y0 = y + 70, y1 = bottom - 80, area = y1 - y0;
+  const n = d.songs.length, k = o.artists ? 2.2 : 1.55;
+  let cols = 1, rows = n, f = Math.min(66, area / Math.max(1, rows * k));
+  if (f < 36 && n > 6) { cols = 2; rows = Math.ceil(n / 2); f = Math.min(54, area / (rows * k)); }
+  f = Math.max(16, f);
+  const rowH = f * k, gap = 44, colW = (W - 2 * P - (cols - 1) * gap) / cols;
+  const used = rows * rowH;
+  const start = y0 + Math.max(0, (area - used) / 2) * 0.7;
+  d.songs.forEach((s, i) => {
+    const col = cols === 2 && i >= rows ? 1 : 0;
+    const r = col ? i - rows : i;
+    const cx = P + col * (colW + gap);
+    const by = start + r * rowH + f * 0.95;
+    x.font = `700 ${Math.round(f * 0.58)}px ${IMG_BODY}`; x.fillStyle = T.acc;
+    x.fillText(String(i + 1).padStart(2, '0'), cx, by);
+    const tx = cx + f * 1.3;
+    x.font = `700 ${Math.round(f)}px ${IMG_DISPLAY}`; x.fillStyle = T.ink;
+    const tw = x.measureText(s.title).width, room = colW - f * 1.3;
+    if (tw > room) x.font = `700 ${Math.floor(Math.max(f * 0.7, f * room / tw * 0.98))}px ${IMG_DISPLAY}`; // titre long : un peu plus petit avant de couper
+    x.fillText(fitText(x, s.title, room), tx, by);
+    if (o.artists) {
+      x.font = `500 ${Math.round(f * 0.54)}px ${IMG_BODY}`; x.fillStyle = T.dust;
+      x.fillText(fitText(x, s.artist || '', colW - f * 1.3), tx, by + f * 0.78);
+    }
+    if (r < rows - 1 && !(col === 0 && cols === 2 && i === n - 1)) { x.fillStyle = T.line; x.fillRect(tx, start + (r + 1) * rowH - f * 0.3, colW - f * 1.3, 2); }
+  });
+
+  // Pied : nombre de morceaux et durée.
+  x.font = `600 30px ${IMG_BODY}`; x.fillStyle = T.dust;
+  x.fillText(`${plural(n, 'morceau', 'morceaux')}${d.secs ? ` · environ ${fmtMin(d.secs)}` : ''}`, P, bottom);
+  x.fillStyle = T.acc; x.fillRect(W - P - 64, bottom - 10, 64, 6);
+  // toDataURL plutôt que toBlob : toBlob attend que la page soit au repos, ce qui peut prendre des secondes.
+  const bin = atob(c.toDataURL('image/png').split(',')[1]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: 'image/png' });
+}
+async function queueImage(g, o, key) {
+  if (queueImage.key === key) return;
+  queueImage.key = key;
+  try {
+    const blob = await drawSetlistImage(g, o);
+    if (queueImage.key !== key || !blob) return;
+    if (app.img) URL.revokeObjectURL(app.img.url);
+    app.img = { key, blob, url: URL.createObjectURL(blob), name: `setlist-${slugify(g.name)}.png`, title: g.name };
+    if (app.sheet && app.sheet.type === 'gig-image') renderSheet();
+  } catch { queueImage.key = null; }
+}
+function sheetGigImage() {
+  const g = currentGig();
+  if (!g) return null;
+  const o = imgOpts();
+  const key = imgKey(g, o);
+  const ready = app.img && app.img.key === key;
+  if (!ready) queueImage(g, o, key);
+  const seg = (k, opts, label) => `<div class="seg" role="group" aria-label="${label}">${opts.map(([v, l]) => `<button data-act="img-opt" data-k="${k}" data-v="${v}" aria-pressed="${o[k] === v}">${l}</button>`).join('')}</div>`;
+  return `
+    ${sheetHead('Setlist en image', esc(g.name))}
+    <div class="img-opts">
+      ${seg('fmt', [['story', 'Story'], ['post', 'Post']], 'Format')}
+      ${seg('theme', [['brume', 'Brume'], ['nuit', 'Nuit'], ['mousse', 'Mousse']], 'Couleurs')}
+      <button class="chip" data-act="img-opt" data-k="artists" aria-pressed="${o.artists}">Artistes</button>
+    </div>
+    <div class="img-prev ${o.fmt}">${ready ? `<img src="${app.img.url}" alt="Image de la setlist ${esc(g.name)}">` : '<span class="img-wait">Préparation…</span>'}</div>
+    <div class="img-actions">
+      <button class="btn primary" data-act="img-share" ${ready ? '' : 'disabled'}>${ICON.share}Partager</button>
+      <button class="btn" data-act="img-save" ${ready ? '' : 'disabled'}>${ICON.dl}Télécharger</button>
+    </div>`;
+}
+function downloadBlob(blob, name) {
+  if (PREVIEW) { toast('Le téléchargement marche sur le site en ligne'); return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/* ----- Sauvegarde ----- */
+// Remplace les données du groupe par une copie (fichier ou copie automatique du serveur). Annulable.
+async function restoreData(data, label) {
+  if (data && data.app === 'hysteria' && data.data) data = data.data;
+  if (!data || typeof data !== 'object' || !data.songs || typeof data.songs !== 'object') { toast('Ce fichier n’est pas une sauvegarde Hysteria'); return; }
+  if (!(await askConfirm(`Remettre toutes les données du groupe comme ${label} ? Ça change pour tout le monde.`, 'Restaurer'))) return;
+  const ops = [];
+  for (const root of ROOTS) {
+    const cur = D(root);
+    const next = data[root] && typeof data[root] === 'object' && !Array.isArray(data[root]) ? data[root] : {};
+    for (const k of Object.keys(cur)) if (!(k in next)) ops.push({ op: 'del', path: [root, k] });
+    for (const [k, v] of Object.entries(next)) if (JSON.stringify(cur[k]) !== JSON.stringify(v)) ops.push({ op: 'set', path: [root, k], value: v });
+  }
+  if (!ops.length) { toast('Rien à changer : c’est déjà pareil'); return; }
+  closeSheet();
+  commitUndoable(ops, 'Copie restaurée');
+}
+async function loadBackups() {
+  if (app.mode === 'local') return;
+  app.backups = 'loading';
+  try {
+    const r = await fetch(API + '?backups=1', { headers: headers(), cache: 'no-store' });
+    const res = await r.json();
+    app.backups = Array.isArray(res.backups) ? res.backups : 'error';
+  } catch { app.backups = 'error'; }
+  if (app.sheet && app.sheet.type === 'profile') renderSheet();
+}
+function backupBlock() {
+  const b = app.backups;
+  const list = app.mode === 'local' ? '' : !Array.isArray(b)
+    ? `<p class="hint">${b === 'error' ? 'Copies automatiques indisponibles pour l’instant.' : 'Chargement des copies…'}</p>`
+    : b.length ? `<p class="hint bk-hint">Copies automatiques, une par jour (avant les premières modifs), gardées 30 jours :</p>
+      <ul class="bk-list">${b.slice(0, 10).map((day) => `<li><span>${esc(fmtDay.format(parseISO(day)))}</span><button class="link-btn" data-act="backup-restore" data-day="${esc(day)}">Restaurer</button></li>`).join('')}</ul>`
+    : '<p class="hint">Une copie se fera automatiquement chaque jour où quelque chose change.</p>';
+  return `
+    <h3 class="block-title">Sauvegarde</h3>
+    <div class="bk-actions">
+      <button class="btn" data-act="backup-download">${ICON.dl}Télécharger une copie</button>
+      <label class="btn">${ICON.ul}Restaurer un fichier<input type="file" accept="application/json,.json" data-file="backup" hidden></label>
+    </div>
+    ${list}`;
 }
 
 /* ----- Couleur de la pochette ----- */
@@ -3068,13 +3407,38 @@ const actions = {
   'stage-open'() {
     const g = currentGig();
     if (!g || !gigEntries(g).length) { toast('La setlist est vide'); return; }
-    if (metro.playing) metro.stop();
-    app.stage = { gigId: g.id, idx: 0, auto: LS.get('hy.stageAuto', false), lyrics: LS.get('hy.stageSheet', true), scroll: LS.get('hy.stageScroll', false), paused: false, zoom: LS.get('hy.stageZoom', 1), locked: false, pos: 0 };
-    document.body.style.overflow = 'hidden';
-    keepAwake(true);
+    stageStart({ gigId: g.id });
+  },
+  'prog-add'(el) { const id = el.dataset.id; progSet(el.dataset.ev, (l) => (l.includes(id) ? l : [...l, id])); },
+  'prog-del'(el) { const id = el.dataset.id; progSet(el.dataset.ev, (l) => l.filter((x) => x !== id)); },
+  'prog-add-all'(el) {
+    const ev = D('events')[el.dataset.id];
+    if (!ev) return;
+    const add = progSuggest(ev).map((x) => x.s.id);
+    progSet(ev.id, (l) => [...l, ...add.filter((id) => !l.includes(id))]);
+  },
+  'pick-prog'(el) { delete app.drafts['pick.q']; openSheet({ type: 'pick-prog', id: el.dataset.id }); },
+  'toggle-prog-song'(el) {
+    const id = el.dataset.id;
+    progSet(app.sheet.id, (l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
+  },
+  'pick-prog-done'() { openSheet({ type: 'event', id: app.sheet.id }); },
+  'stage-prog'(el) {
+    const ev = D('events')[el.dataset.id];
+    if (!ev || !(ev.prog || []).some((id) => D('songs')[id])) { toast('Le programme est vide'); return; }
+    closeSheet();
+    stageStart({ evId: ev.id });
+  },
+  'stage-sync'() {
+    const st = app.stage;
+    if (!st) return;
+    if (app.mode === 'local') { toast('La synchro marche sur le site en ligne'); return; }
+    st.sync = !st.sync;
+    st.joined = false;
+    LS.set('hy.stageSync', st.sync);
+    toast(st.sync ? 'Synchro : tu suis le groupe' : 'Synchro coupée : tu avances seul');
     renderStage();
-    const q = $('#stage .st-nav [data-v="1"]');
-    if (q) q.focus({ preventScroll: true });
+    if (st.sync) livePull();
   },
   'stage-exit'() { stageExit(); },
   'stage-side'() { if (app.stage) { app.stage.side = !app.stage.side; renderStage(); } },
@@ -3219,7 +3583,40 @@ const actions = {
   },
 
   /* Profil */
-  'open-profile'() { delete app.drafts['me.role']; openSheet({ type: 'profile' }); },
+  'open-profile'() { delete app.drafts['me.role']; openSheet({ type: 'profile' }); loadBackups(); },
+  'backup-download'() {
+    const body = JSON.stringify({ app: 'hysteria', at: new Date().toISOString(), data: app.view }, null, 1);
+    downloadBlob(new Blob([body], { type: 'application/json' }), `hysteria-sauvegarde-${todayISO()}.json`);
+  },
+  async 'backup-restore'(el) {
+    const day = el.dataset.day;
+    try {
+      const r = await fetch(API + '?backup=' + encodeURIComponent(day), { headers: headers(), cache: 'no-store' });
+      const res = await r.json();
+      if (!r.ok || !res.data) throw new Error();
+      restoreData(res.data, `au début du ${fmtDay.format(parseISO(day))}`);
+    } catch { toast('Copie introuvable'); }
+  },
+  'gig-image'() {
+    const g = currentGig();
+    if (!g || !gigEntries(g).some((e) => e.song)) { toast('Ajoute des morceaux d’abord'); return; }
+    openSheet({ type: 'gig-image' });
+  },
+  'img-opt'(el) {
+    const o = imgOpts();
+    if (el.dataset.k === 'artists') o.artists = !o.artists; else o[el.dataset.k] = el.dataset.v;
+    LS.set('hy.img', o);
+    renderSheet();
+  },
+  'img-save'() { if (app.img) downloadBlob(app.img.blob, app.img.name); },
+  async 'img-share'() {
+    const im = app.img;
+    if (!im) return;
+    const file = new File([im.blob], im.name, { type: 'image/png' });
+    if (!PREVIEW && navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: im.title }); } catch (e) { if (!e || e.name !== 'AbortError') downloadBlob(im.blob, im.name); }
+    } else downloadBlob(im.blob, im.name);
+  },
   'pick-me'(el) {
     app.me = el.dataset.id;
     LS.set('hy.me', app.me);
@@ -3362,6 +3759,13 @@ document.addEventListener('keydown', (e) => {
 function onField(e) {
   const t = e.target;
   if (!t.dataset) return;
+  if (t.dataset.file === 'backup' && e.type === 'change') {
+    const f = t.files && t.files[0];
+    t.value = '';
+    if (!f) return;
+    f.text().then((txt) => { let d = null; try { d = JSON.parse(txt); } catch {} restoreData(d, `dans le fichier « ${f.name} »`); });
+    return;
+  }
   if (t.dataset.draft) app.drafts[t.dataset.draft] = t.value;
   if (t.dataset.draft === 'song.search' && e.type === 'input') { querySuggest(t.value); renderSheet(); return; }
   if (t.dataset.bind === 'query') { app.query = t.value; renderView(); }
