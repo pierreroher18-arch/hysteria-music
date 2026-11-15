@@ -4,7 +4,7 @@
 export const MEMBERS = [
   { id: 'achille', name: 'Achille', color: '#b5562f' },
   { id: 'quentin', name: 'Quentin', color: '#2f6f9a' },
-  { id: 'mathieu', name: 'Mathieu', color: '#7c4f8e' },
+  { id: 'mathieu', name: 'Matthieu', color: '#7c4f8e' },
   { id: 'pierre', name: 'Pierre', color: '#b98a12' },
 ];
 

@@ -1196,7 +1196,7 @@ textarea.input.chart-input { min-height: 200px; font: 500 14.5px/1.5 ui-monospac
 .st-pos b { color: var(--s-ink); font-size: 22px; }
 .st-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 20px 16px; display: flex; flex-direction: column; gap: 18px; }
 .st-body > * { width: 100%; max-width: 900px; margin-left: auto; margin-right: auto; }
-.st-title { margin: 0; font: 800 calc(clamp(34px, 10vw, 96px) * var(--zoom, 1))/0.98 var(--display); letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: anywhere; }
+.st-title { margin: 0; font: 800 calc(clamp(30px, 8.4vw, 96px) * var(--zoom, 1))/0.98 var(--display); letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: break-word; }
 .st-artist { margin-top: -10px; font-size: clamp(17px, 3.6vw, 24px); color: var(--s-dim); }
 .st-stats { display: flex; flex-wrap: wrap; gap: 10px 28px; }
 .st-stats div { display: grid; gap: 2px; }
@@ -1358,3 +1358,102 @@ textarea.input.chart-input { min-height: 200px; font: 500 14.5px/1.5 ui-monospac
   .pr-table th, .pr-table td { padding: 4pt 6pt; border: .6pt solid #777; text-align: left; }
   .pr-table th { background: #eee; }
 }
+
+/* ---------- Fiche morceau : tona jouée, Songsterr ---------- */
+.tonabox { display: grid; justify-items: end; gap: 4px; text-align: right; }
+.tona-ctl { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper); }
+.tona-ctl button { width: 36px; height: 36px; border-radius: 50%; font: 700 19px/1 var(--num); color: var(--ink); }
+.tona-ctl button:hover { background: var(--surface); }
+.tona-v { min-width: 84px; padding: 0 4px; text-align: center; font: 700 15.5px/1 var(--body); white-space: nowrap; }
+.btn.songsterr { margin-top: 14px; min-height: 52px; font-size: 16px; }
+.btn.songsterr svg { width: 20px; height: 20px; }
+
+/* ---------- Nos accords au-dessus des mots ---------- */
+.cp { padding: 14px 16px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.cp-line { display: flex; flex-wrap: wrap; align-items: flex-end; }
+.cw { display: inline-flex; flex-direction: column; align-items: flex-start; min-width: 0; padding: 0; text-align: left; }
+.cw .ch { min-height: 1.25em; padding-right: .4em; font: 700 14px/1.25 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; color: var(--chord); white-space: pre; }
+.cw .tx { font: 400 16.5px/1.5 var(--body); white-space: pre; }
+.cp-line.plain .ch { display: none; }
+.cp-line.only .cw { margin-right: .8em; }
+.cp-line.only .tx { display: none; }
+.cp-sec { margin: 14px 0 4px; font: 700 13.5px/1.3 var(--body); color: var(--dust); letter-spacing: .02em; }
+.cp-sec:first-child { margin-top: 0; }
+.cp-gap { height: 12px; }
+.cp.edit .cp-line.plain .ch { display: block; }
+.cp.edit .cw { border-radius: 6px; cursor: pointer; }
+.cp.edit .cw:hover { background: color-mix(in srgb, var(--chord) 12%, transparent); }
+.cp.edit .cw.sel { background: var(--ink); color: var(--paper); }
+.cp.edit .cw.sel .ch { color: var(--paper); }
+.cp.edit .cp-line.only .tx { display: block; }
+.cp.on-stage { padding: 0; background: transparent; border: 0; }
+.cp.on-stage .tx { font-size: calc(21px * var(--zoom, 1)); color: var(--s-ink); }
+.cp.on-stage .ch { font-size: calc(18px * var(--zoom, 1)); color: #f0c36b; }
+.cp.on-stage .cp-sec { color: var(--s-acc); font-size: calc(15px * var(--zoom, 1)); }
+.cp-picker {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: grid;
+  gap: 8px;
+  margin: 14px calc(-1 * var(--sh-pr)) 0 calc(-1 * var(--sh-pl));
+  padding: 12px var(--sh-pr) 14px var(--sh-pl);
+  background: var(--paper);
+  border-top: 1px solid var(--line2);
+  box-shadow: 0 -12px 26px color-mix(in srgb, var(--shade) 12%, transparent);
+}
+.cpp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 600; }
+.cpp-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.cpp-chip { flex: none; padding: 7px 11px; border-radius: 999px; border: 1px solid var(--chord); color: var(--chord); font: 700 14px/1 ui-monospace, Menlo, monospace; }
+.cpp-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.cpp-grid button { display: grid; place-items: center; text-align: center; min-height: 40px; border-radius: 10px; border: 1px solid var(--line2); background: var(--surface); font: 700 15px/1 var(--body); color: var(--ink); }
+.cpp-grid.q button { font-size: 13.5px; font-weight: 600; }
+.cpp-grid button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+code { font: 600 0.92em ui-monospace, Menlo, monospace; padding: 1px 4px; border-radius: 4px; background: var(--surface); }
+
+/* ---------- Mode scène : déroulé sur le côté ---------- */
+.stage { flex-direction: row; }
+.st-main { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.st-side {
+  position: absolute; z-index: 6; top: 0; bottom: 0; left: 0;
+  width: min(320px, 86vw);
+  display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: #151812;
+  border-right: 1px solid var(--s-line);
+  transform: translateX(-102%);
+  transition: transform .22s ease;
+}
+.st-side.open { transform: none; box-shadow: 14px 0 40px rgba(0, 0, 0, .55); }
+.ss-head { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--s-line); }
+.ss-head b { font: 800 19px/1 var(--display); }
+.ss-head span { flex: 1; min-width: 0; font-size: 13px; color: var(--s-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ss-list { list-style: none; margin: 0; padding: 6px 0; flex: 1; overflow-y: auto; }
+.ss-row { width: 100%; display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: baseline; padding: 10px 14px 10px 11px; border-left: 3px solid transparent; text-align: left; }
+.ss-n { font: 700 14px/1 var(--num); color: var(--s-dim); text-align: right; }
+.ss-t { font-weight: 600; font-size: 15px; line-height: 1.25; overflow-wrap: anywhere; }
+.ss-t small { display: block; margin-top: 2px; font-size: 12px; font-weight: 600; color: #f0c36b; }
+.ss-d { font: 500 13px/1 var(--num); color: var(--s-dim); font-variant-numeric: tabular-nums; }
+.ss-row.done { opacity: .45; }
+.ss-row.now { background: #20251b; border-left-color: var(--s-acc); }
+.ss-row.now .ss-t { color: var(--s-acc); }
+.ss-row.item .ss-t { font-style: italic; color: var(--s-dim); }
+@media (min-width: 900px) {
+  .st-side { position: static; transform: none; width: 300px; flex: none; box-shadow: none; }
+  .ss-close, .st-side-btn { display: none; }
+}
+
+/* ---------- Plan de scène libre ---------- */
+.plot-gig { display: grid; gap: 4px; margin: -2px 0 10px; font-size: 13.5px; color: var(--dust); }
+.plot.edit .pi { cursor: grab; touch-action: none; }
+.plot .sp-hit { fill: transparent; }
+.plot .sp-sel { fill: none; stroke: var(--moss); stroke-width: 1.4; stroke-dasharray: 4 3; }
+.plot .sp-gear { fill: var(--paper); stroke: var(--line2); }
+.plot .sp-gtx { font-family: var(--body); font-weight: 600; fill: var(--ink); text-anchor: middle; }
+.plot .sp-label { font-family: var(--body); font-weight: 700; fill: var(--dust); text-anchor: middle; letter-spacing: .03em; }
+.plot.print .sp-gear { fill: #fff; stroke: #000; }
+.plot.print .sp-gtx, .plot.print .sp-label { fill: #000; }
+.plot-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.plot-tools b { flex: 1 1 100%; font-size: 15px; }
+.plot-tools .st-group { display: inline-flex; gap: 6px; }
+.plot-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; }
