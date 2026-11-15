@@ -34,7 +34,9 @@ export const GEAR_CATS = [
 
 export const DEFAULT_PLACE = 'La Vapeur';
 
-const ROOTS = new Set(['songs', 'notes', 'events', 'gigs', 'gear', 'avail', 'members']);
+export const TUNINGS = ['Standard', 'Demi-ton en dessous', 'Un ton en dessous', 'Drop D', 'Drop C♯', 'Drop C', 'Open G', 'Open D', 'DADGAD'];
+
+const ROOTS = new Set(['songs', 'notes', 'events', 'gigs', 'gear', 'avail', 'members', 'log']);
 // Racines où l'on peut créer un niveau intermédiaire (ex. avail/2026-11-20/pierre).
 const FREE_ROOTS = new Set(['avail']);
 const SAFE_KEY = /^[A-Za-z0-9_-]{1,64}$/;
@@ -82,7 +84,7 @@ export function seedState() {
       levels: {},
     };
   });
-  return { v: 2, songs, notes: {}, events: {}, gigs: {}, gear: {}, avail: {}, members: {} };
+  return { v: 2, songs, notes: {}, events: {}, gigs: {}, gear: {}, avail: {}, members: {}, log: {} };
 }
 
 export function newId(prefix = '') {

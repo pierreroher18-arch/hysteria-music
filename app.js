@@ -1,4 +1,4 @@
-import { MEMBERS, LEVELS, GEAR_CATS, DEFAULT_PLACE, seedState, newId, applyOps, ytMusic } from './shared.mjs';
+import { MEMBERS, LEVELS, GEAR_CATS, DEFAULT_PLACE, TUNINGS, seedState, newId, applyOps, ytMusic } from './shared.mjs';
 
 /* ================= Utilitaires ================= */
 const $ = (s, el = document) => el.querySelector(s);
@@ -30,6 +30,57 @@ function coverTile(s, size = '') {
   return `<span class="cov ${size}" style="--tone:${tone}" aria-hidden="true"><span class="cov-init">${esc(initials)}</span>${img}</span>`;
 }
 
+// Couleur de fond de la fiche : celle tirée de la pochette, sinon la teinte de la vignette.
+const isTone = (t) => /^#[0-9a-f]{6}$/i.test(t || '');
+const toneOf = (s) => (isTone(s.tone) ? s.tone : COVER_TONES[hashStr(s.title) % COVER_TONES.length]);
+function inkFor(hex) {
+  const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.3 ? '#1d2119' : '#f4f5ee';
+}
+// Accordage et capo : on n'affiche que ce qui change du standard.
+const tuningOf = (s) => (s && s.tuning && s.tuning !== 'Standard' ? s.tuning : '');
+const tuneBits = (s) => [tuningOf(s), s.capo > 0 ? `capo ${s.capo}` : ''].filter(Boolean);
+// Liens vers les accords, tablatures et paroles, pour chaque morceau (y compris ceux ajoutés plus tard).
+function extLinks(s) {
+  const q = encodeURIComponent(`${s.artist || ''} ${s.title || ''}`.trim());
+  return [
+    { label: 'Accords', site: 'Ultimate Guitar', url: `https://www.ultimate-guitar.com/search.php?search_type=title&value=${q}` },
+    { label: 'Tablatures', site: 'Songsterr', url: `https://www.songsterr.com/a/wa/bestMatchForQueryString?s=${encodeURIComponent(s.title || '')}&a=${encodeURIComponent(s.artist || '')}` },
+    { label: 'Paroles', site: 'Genius', url: `https://genius.com/search?q=${q}` },
+  ];
+}
+
+// Paroles cherchées à la demande (LRCLIB, via /api/lyrics). Gardées en mémoire le temps de la session.
+const lyricsKey = (s) => `${s.title}|${s.artist}`;
+function loadLyrics(s, retry) {
+  if (!s || app.mode === 'local') return;
+  const k = lyricsKey(s);
+  if (app.lyrics[k] && !retry) return;
+  app.lyrics[k] = { state: 'loading' };
+  const q = new URLSearchParams({ title: s.title || '', artist: s.artist || '' });
+  if (s.duration) q.set('duration', String(s.duration));
+  fetch('/api/lyrics?' + q.toString(), { headers: headers() })
+    .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+    .then(({ ok, j }) => {
+      if (j && j.found) app.lyrics[k] = { state: 'ok', text: j.lyrics || '', instrumental: !!j.instrumental };
+      else app.lyrics[k] = { state: ok ? 'none' : 'error' };
+    })
+    .catch(() => { app.lyrics[k] = { state: 'error' }; })
+    .finally(() => { renderSheet(); renderStage(); });
+}
+function lyricsBody(s, cls = 'lyrics') {
+  if (app.mode === 'local') return '<p class="empty-note">Les paroles s’affichent sur le site en ligne.</p>';
+  loadLyrics(s);
+  const l = app.lyrics[lyricsKey(s)] || { state: 'loading' };
+  if (l.state === 'loading') return '<p class="empty-note">Recherche des paroles…</p>';
+  if (l.state === 'error') return '<p class="empty-note">La recherche de paroles ne répond pas. <button class="link-btn" data-act="lyrics-retry">Réessayer</button></p>';
+  if (l.state === 'none') return '<p class="empty-note">Pas trouvées automatiquement. Le bouton Paroles (Genius) au-dessus devrait les avoir.</p>';
+  if (l.instrumental || !l.text) return '<p class="empty-note">Morceau instrumental, pas de paroles.</p>';
+  return `<pre class="${cls}">${esc(l.text)}</pre>`;
+}
+
 const ICON = {
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></svg>',
@@ -40,6 +91,12 @@ const ICON = {
   grip: '<svg viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14"/></svg>',
   prev: '<svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>',
   next: '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
+  grid: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>',
+  list: '<svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4.5 6h.01M4.5 12h.01M4.5 18h.01" stroke-width="3"/></svg>',
+  stage: '<svg viewBox="0 0 24 24"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><path d="M10 9l5 3-5 3z"/></svg>',
+  print: '<svg viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v6H7z"/></svg>',
+  cal: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
+  out: '<svg viewBox="0 0 24 24"><path d="M8 16L16 8M9.5 8H16v6.5"/></svg>',
 };
 const PREVIEW = !!window.HYSTERIA_PREVIEW;
 const TABS = ['repertoire', 'setlist', 'planning', 'matos'];
@@ -102,7 +159,18 @@ const app = {
   suggest: { q: '', items: [] },
   calSel: null,
   calMode: 'fill',
+  theme: LS.get('hy.theme', 'auto'),
+  repView: LS.get('hy.repView', 'list'),
+  seen: LS.get('hy.seen', null),
+  seenBefore: 0,
+  chartEdit: null,
+  stage: null,
+  wake: null,
+  lyrics: {},
+  showLyrics: LS.get('hy.showLyrics', false),
 };
+if (!['auto', 'light', 'dark'].includes(app.theme)) app.theme = 'auto';
+if (app.seen == null) { app.seen = Date.now(); LS.set('hy.seen', app.seen); }
 if (!TABS.includes(app.tab)) app.tab = 'repertoire';
 if (!MEMBERS.some((m) => m.id === app.me)) app.me = null;
 if (app.base) app.view = applyOps(clone(app.base), clone(app.pending));
@@ -246,6 +314,34 @@ function nextEvent() {
 }
 const evTitle = (ev) => ev.title || (ev.type === 'concert' ? 'Concert' : 'Répète');
 
+/* ----- Fil d'activité ----- */
+// Ajoute une ligne au fil. Si je refais la même chose dans les 10 minutes, on met à jour la ligne au lieu d'en créer une.
+function logOps(text, key, many) {
+  if (!app.me || !app.view) return [];
+  const now = Date.now();
+  const entries = Object.values(D('log'));
+  const last = entries.filter((e) => e.by === app.me).sort((a, b) => (b.ts || 0) - (a.ts || 0))[0];
+  if (key && last && last.k === key && now - last.ts < 600000) {
+    return [{ op: 'set', path: ['log', last.id], value: { ...last, ts: now, text: many || text } }];
+  }
+  const id = newId('l');
+  const ops = [{ op: 'set', path: ['log', id], value: { id, by: app.me, text, k: key || '', ts: now } }];
+  if (entries.length >= 80) {
+    entries.sort((a, b) => (a.ts || 0) - (b.ts || 0)).slice(0, entries.length - 59)
+      .forEach((e) => ops.push({ op: 'del', path: ['log', e.id] }));
+  }
+  return ops;
+}
+function markSeen() {
+  const newest = Object.values(D('log')).reduce((m, e) => Math.max(m, e.ts || 0), 0);
+  app.seen = Math.max(Date.now(), newest);
+  LS.set('hy.seen', app.seen);
+}
+function unseenCount() {
+  if (app.sheet && app.sheet.type === 'activity') { markSeen(); return 0; }
+  return Object.values(D('log')).filter((e) => e.ts > app.seen && e.by !== app.me).length;
+}
+
 /* ================= Métronome ================= */
 const metro = {
   ctx: null, playing: false, bpm: 0, songId: null, next: 0, beat: 0, timer: null, beats: [],
@@ -264,7 +360,7 @@ const metro = {
     this.next = this.ctx.currentTime + 0.08;
     this.timer = setInterval(() => this.tick(), 25);
     this.tick();
-    renderPlaybar(); renderView(); renderSheet();
+    renderPlaybar(); renderView(); renderSheet(); renderStage();
     requestAnimationFrame(beatLoop);
   },
   tick() {
@@ -298,7 +394,7 @@ const metro = {
     this.playing = false;
     this.songId = null;
     this.beats = [];
-    renderPlaybar(); renderView(); renderSheet();
+    renderPlaybar(); renderView(); renderSheet(); renderStage();
   },
   toggle(songId, bpm) {
     if (this.playing && this.songId === songId) this.stop();
@@ -313,7 +409,7 @@ function beatLoop() {
   const now = performance.now() / 1000;
   let cur = null;
   for (const b of metro.beats) { if (b.t <= now) cur = b; else break; }
-  document.querySelectorAll('#playbar .beats i').forEach((d, i) => d.classList.toggle('on', !!cur && cur.n === i && now - cur.t < 0.16));
+  document.querySelectorAll('.beats').forEach((g) => g.querySelectorAll('i').forEach((d, i) => d.classList.toggle('on', !!cur && cur.n === i && now - cur.t < 0.16)));
 }
 
 /* ================= Rendu ================= */
@@ -342,6 +438,7 @@ function renderAll() {
   renderTabs();
   renderView();
   renderSheet();
+  renderStage();
   renderOverlay();
 }
 
@@ -350,6 +447,11 @@ function renderHeader() {
   const dotCls = app.mode === 'local' ? 'local' : app.mode === 'offline' ? 'offline' : (app.sending || app.pending.length) ? 'sending' : '';
   me.innerHTML = `<span class="dot ${dotCls}"></span>${esc(app.me ? memberName(app.me) : 'Profil')}`;
   me.title = statusText();
+  const n = app.view ? unseenCount() : 0;
+  const badge = $('#bellN');
+  badge.hidden = !n;
+  badge.textContent = n > 9 ? '9+' : String(n);
+  $('#bellBtn').setAttribute('aria-label', n ? `Activité du groupe, ${n} nouveauté${n > 1 ? 's' : ''}` : 'Activité du groupe');
   renderNextLine();
   renderPlaybar();
 }
@@ -442,7 +544,14 @@ function viewRepertoire() {
   const cells = Math.max(1, n * MEMBERS.length);
   const meter = [4, 3, 2, 1].map((v) => `<span style="width:${(counts[v] / cells) * 100}%;background:${LV_COLORS[v]}"></span>`).join('');
 
-  const rows = list.map((s) => `
+  const grid = app.repView === 'grid';
+  const rows = list.map((s) => grid ? `
+    <li class="tile${metro.playing && metro.songId === s.id ? ' playing' : ''}" data-act="open-song" data-id="${esc(s.id)}" tabindex="0" role="button" aria-label="${esc(s.title)}, ${esc(s.artist)}">
+      ${coverTile(s, 'xl')}
+      <span class="t-title">${esc(s.title)}</span>
+      <span class="t-artist">${esc(s.artist)}</span>
+      <span class="t-meta"><span class="pips">${pipsFor(s)}</span><span class="t-bpm">${s.bpm ? s.bpm + ' bpm' : ''}</span></span>
+    </li>` : `
     <li class="song${metro.playing && metro.songId === s.id ? ' playing' : ''}" data-act="open-song" data-id="${esc(s.id)}" tabindex="0" role="button">
       ${coverTile(s)}
       <div class="main"><span class="title">${esc(s.title)}</span><span class="artist">${esc(s.artist)}</span></div>
@@ -466,9 +575,13 @@ function viewRepertoire() {
         <button data-act="rep-sort" data-v="az" aria-pressed="${app.repSort === 'az'}">De A à Z</button>
         <button data-act="rep-sort" data-v="work" aria-pressed="${app.repSort === 'work'}">À bosser</button>
       </div>
+      <div class="seg icons" role="group" aria-label="Affichage">
+        <button data-act="rep-view" data-v="list" aria-pressed="${!grid}" aria-label="En liste" title="En liste">${ICON.list}</button>
+        <button data-act="rep-view" data-v="grid" aria-pressed="${grid}" aria-label="En mosaïque" title="En mosaïque">${ICON.grid}</button>
+      </div>
       <input class="search" type="search" placeholder="Chercher un morceau" data-draft="q" data-bind="query" value="${esc(app.query)}" aria-label="Chercher un morceau">
     </div>
-    <ul class="songs">${rows || '<p class="empty-note">Aucun morceau ne correspond.</p>'}</ul>
+    <ul class="songs${grid ? ' grid' : ''}">${rows || '<p class="empty-note">Aucun morceau ne correspond.</p>'}</ul>
     <div class="legend">${LEVELS.map((l) => `<span><i class="lvl-sw-${l.v}"></i>${esc(l.label)}</span>`).join('')}</div>`;
 }
 
@@ -522,7 +635,7 @@ function viewSetlist() {
         <button class="grip" data-drag-handle aria-label="Déplacer ${esc(s.title)}">${ICON.grip}</button>
         <span class="sl-num">${i + 1}</span>
         ${coverTile(s, 'sm')}
-        <button class="sl-main" data-act="open-song" data-id="${esc(id)}"><span class="title">${esc(s.title)}</span><span class="artist">${esc(s.artist)}</span></button>
+        <button class="sl-main" data-act="open-song" data-id="${esc(id)}"><span class="title">${esc(s.title)}</span><span class="artist">${esc(s.artist)}</span>${tuneBits(s).length ? `<span class="tune-tag">${esc(tuneBits(s).join(', '))}</span>` : ''}</button>
         <span class="sl-meta"><span class="bpm">${s.bpm || ''}</span><span class="key">${esc(s.key || '')}</span></span>
         <button class="x" data-act="gig-remove-song" data-id="${esc(id)}" aria-label="Retirer ${esc(s.title)} de la setlist">${ICON.close}</button>
       </li>${gap}`;
@@ -531,7 +644,11 @@ function viewSetlist() {
   const known = ids.filter((id) => songs[id].duration).length;
   const countLabel = (n) => plural(n, 'morceau', 'morceaux') + (known ? `, environ ${Math.round(total / 60)} min${known < n ? ' (sans les durées manquantes)' : ''}` : '');
   return head + gigChips() + gigHead(g, ids.length, countLabel) + `
-    ${ids.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Maintiens la poignée à gauche et fais glisser pour changer l’ordre. Touche « Transition » entre deux morceaux pour noter comment vous enchaînez.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
+    ${ids.length ? `<div class="sl-tools">
+      <button class="btn small primary" data-act="stage-open">${ICON.stage}Mode scène</button>
+      <button class="btn small" data-act="print-setlist">${ICON.print}Imprimer</button>
+    </div>` : ''}
+    ${ids.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Maintiens la poignée à gauche et fais glisser pour changer l’ordre. Touche « Transition » entre deux morceaux pour noter comment vous enchaînez.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
     <div class="add-row"><button class="btn primary block" data-act="pick-songs">${ICON.plus}Ajouter des morceaux</button></div>`;
 }
 
@@ -581,6 +698,13 @@ function dayPanel(iso, evByDate) {
           </div>
         </div>` : ''}
       ${!mine && !past && app.me ? `<button class="chip" data-act="toggle-day" data-date="${iso}">Je suis dispo ce jour-là</button>` : ''}
+      ${!past && app.me ? (() => {
+        const wd = fmtWeekday.format(parseISO(iso));
+        const any = Array.from({ length: 13 }, (_, w) => addDays(iso, 7 * w)).some((d) => availOn(d).includes(app.me));
+        return `<div class="dp-repeat"><span>Tous les ${esc(wd)}s, pendant 3 mois :</span>
+          <button class="chip" data-act="repeat-avail" data-v="on">Je suis dispo</button>
+          ${any ? '<button class="chip" data-act="repeat-avail" data-v="off">Plus dispo</button>' : ''}</div>`;
+      })() : ''}
     </div>`;
 }
 
@@ -746,11 +870,15 @@ function viewMatos() {
 /* ================= Panneaux ================= */
 function openSheet(s) {
   app.sheet = s;
+  app.chartEdit = null;
   renderSheet();
 }
 function closeSheet() {
+  const wasActivity = app.sheet && app.sheet.type === 'activity';
   app.sheet = null;
+  app.chartEdit = null;
   renderSheet();
+  if (wasActivity) renderHeader();
 }
 
 function renderSheet() {
@@ -768,6 +896,7 @@ function renderSheet() {
     'pick-gear': sheetPickGear,
     transition: sheetTransition,
     profile: sheetProfile,
+    activity: sheetActivity,
   }[s.type];
   const html = fn ? fn(s) : null;
   if (html === null) { hide(); return; }
@@ -775,6 +904,9 @@ function renderSheet() {
   wrap.hidden = false;
   document.body.style.overflow = 'hidden';
   patch(el, html);
+  const hero = el.querySelector('.song-hero');
+  el.classList.toggle('has-hero', !!hero);
+  if (hero) el.style.setProperty('--hero-ink', hero.style.getPropertyValue('--hero-ink'));
   if (wasHidden) el.scrollTop = 0;
 }
 
@@ -802,19 +934,21 @@ function sheetSong(s) {
   const link = safeUrl(song.link) || 'https://music.youtube.com/search?q=' + encodeURIComponent(song.artist + ' ' + song.title);
   const members = D('members');
   const inGigs = gigsList().filter((g) => (g.songs || []).includes(song.id));
+  ensureTone(song);
+  const tone = toneOf(song);
+  const editing = app.chartEdit === song.id;
   return `
-    <div class="sh-head song-head">
-      ${coverTile(song, 'lg')}
-      <div class="sh-titles">
+    <div class="song-hero" style="--hero:${tone};--hero-ink:${inkFor(tone)}">
+      <div class="hero-top">${coverTile(song, 'lg')}${closeBtn()}</div>
+      <div class="hero-titles">
         ${inGigs.length ? `<div class="sh-num">Dans ${inGigs.length > 1 ? 'les setlists' : 'la setlist'} ${esc(inGigs.map((g) => g.name).join(', '))}</div>` : ''}
         <h2 class="sh-title">${esc(song.title)}</h2>
         <div class="sh-sub">${esc(song.artist)}${song.duration ? `, ${fmtDur(song.duration)}` : ''}</div>
       </div>
-      ${closeBtn()}
-    </div>
-    <div class="row-actions">
-      <a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener">${ICON.listen}Écouter</a>
-      <button class="btn" data-act="song-edit">Modifier</button>
+      <div class="row-actions">
+        <a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener">${ICON.listen}Écouter</a>
+        <button class="btn" data-act="song-edit">Modifier</button>
+      </div>
     </div>
 
     <div class="tempo-box">
@@ -822,10 +956,24 @@ function sheetSong(s) {
         <div class="tempo-read"><span class="big${song.bpm ? '' : ' empty'}">${song.bpm || '—'}</span><span class="unit">BPM</span></div>
         <div class="keybox"><span class="keyv">${esc(song.key || '—')}</span><span class="keyl">tonalité</span></div>
       </div>
+      <div class="tune-row">
+        <div><b>${esc(tuningOf(song) || 'Standard')}</b><small>Accordage</small></div>
+        <div><b>${song.capo > 0 ? 'Case ' + song.capo : 'Sans'}</b><small>Capo</small></div>
+      </div>
       ${song.bpm
         ? `<button class="btn ${playing ? 'playing' : 'primary'} block" data-act="metro-toggle">${playing ? ICON.stop + 'Arrêter le click' : ICON.play + 'Lancer le click'}</button>`
-        : '<p class="empty-note" style="margin:0">Pas de tempo pour ce morceau. Ajoute-le dans « Modifier » pour avoir le click.</p>'}
+        : '<p class="empty-note" style="margin:0">Pas de tempo pour ce morceau. Ajoute-le dans « Modifier » pour avoir le click.</p>'}
     </div>
+
+    <h3 class="block-title">Paroles et accords</h3>
+    <div class="ext-links">${extLinks(song).map((l) => `
+      <a class="ext" href="${esc(l.url)}" target="_blank" rel="noopener"><b>${esc(l.label)}</b><span>${esc(l.site)}</span></a>`).join('')}
+    </div>
+    <div class="lyr-head">
+      <span>Paroles dans l’appli</span>
+      <button class="link-btn" data-act="lyrics-toggle" aria-expanded="${app.showLyrics}">${app.showLyrics ? 'Masquer' : 'Afficher'}</button>
+    </div>
+    ${app.showLyrics ? lyricsBody(song) : ''}
 
     <h3 class="block-title">Ton niveau${app.me ? '' : ' (choisis ton profil)'}</h3>
     <div class="levels" role="group" aria-label="Ton niveau">
@@ -844,6 +992,16 @@ function sheetSong(s) {
         </div>`;
       }).join('')}
     </div>
+
+    <h3 class="block-title">Notre grille</h3>
+    ${editing ? `
+      <textarea class="input chart-input" id="chartText" data-draft="chart.${esc(song.id)}" spellcheck="false" placeholder="${esc('Intro   | F♯m | A | E | B |\nCouplet | F♯m | A | E | B | ×2\nRefrain | D | E | F♯m |')}" aria-label="Grille du morceau">${esc(draft('chart.' + song.id, song.chart || ''))}</textarea>
+      <div class="chart-actions"><button class="btn primary" data-act="chart-save">Enregistrer</button><button class="btn ghost" data-act="chart-cancel">Annuler</button></div>`
+    : song.chart ? `
+      <pre class="chart">${esc(song.chart)}</pre>
+      <div class="chart-actions"><button class="btn small" data-act="chart-edit">Modifier la grille</button></div>`
+    : `<p class="empty-note" style="margin:0 0 10px">Votre version à vous : les accords, la structure, qui fait quoi. Elle s’affiche aussi en mode scène.</p>
+      <button class="btn small" data-act="chart-edit">${ICON.plus}Écrire la grille</button>`}
 
     <h3 class="block-title">Notes<span class="count">${notes.length || ''}</span></h3>
     ${notes.length ? `<ul class="notes">${notes.map((n) => `
@@ -901,6 +1059,10 @@ function sheetSongEdit(s) {
         <div class="field"><label for="f-bpm">Tempo (BPM)</label><input id="f-bpm" class="input" inputmode="numeric" data-draft="song.bpm" value="${esc(draft('song.bpm'))}" placeholder="ex. 120"></div>
         <div class="field"><label for="f-key">Tonalité</label><input id="f-key" class="input" data-draft="song.key" value="${esc(draft('song.key'))}" placeholder="ex. F♯m"></div>
       </div>
+      <div class="grid-2">
+        <div class="field"><label for="f-tuning">Accordage</label><select id="f-tuning" class="input" data-draft="song.tuning">${TUNINGS.map((t) => `<option ${draft('song.tuning', 'Standard') === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+        <div class="field"><label for="f-capo">Capo</label><select id="f-capo" class="input" data-draft="song.capo">${Array.from({ length: 13 }, (_, i) => `<option value="${i}" ${String(draft('song.capo', '0')) === String(i) ? 'selected' : ''}>${i ? 'Case ' + i : 'Sans capo'}</option>`).join('')}</select></div>
+      </div>
       <div class="field"><label for="f-link">Lien d’écoute</label><input id="f-link" class="input" type="url" data-draft="song.link" value="${esc(draft('song.link'))}" placeholder="Rempli tout seul si tu le laisses vide"></div>
       ${formActions(isNew, 'song-save', 'song-cancel', 'song-delete')}
     </div>`;
@@ -914,7 +1076,7 @@ function querySuggest(q) {
   if (app.mode === 'local' || q.length < 2) { app.suggest = { q: '', items: [] }; return; }
   suggestTimer = setTimeout(async () => {
     try {
-      const r = await fetch('/api/search?limit=6&q=' + encodeURIComponent(q), { headers: headers() });
+      const r = await fetch('/api/search?limit=20&q=' + encodeURIComponent(q), { headers: headers() });
       const j = await r.json();
       if (draft('song.search').trim() !== q) return;
       app.suggest = { q, items: Array.isArray(j.results) ? j.results : [] };
@@ -965,7 +1127,34 @@ function sheetEvent(s) {
     <div class="dispo-row">${dispoChips(ev.date)}</div>
     ${app.me && !av.includes(app.me) && ev.date >= todayISO() ? `<div class="my-dispo"><button class="chip" data-act="toggle-day" data-date="${esc(ev.date)}">Je suis dispo ce jour-là</button></div>` : ''}
     ${ev.notes ? `<h3 class="block-title">Infos</h3><p class="note-text" style="margin:0">${esc(ev.notes)}</p>` : ''}
+    ${ev.date >= todayISO() ? (() => {
+      const { ics, gcal } = calLinks(ev);
+      const online = app.mode !== 'local';
+      return `<h3 class="block-title">Dans ton agenda</h3>
+        <div class="cal-export">
+          ${online ? `<a class="btn primary" href="${esc(ics)}">${ICON.cal}Agenda du téléphone</a>` : `<button class="btn primary" data-act="ics-offline">${ICON.cal}Agenda du téléphone</button>`}
+          <a class="btn" href="${esc(gcal)}" target="_blank" rel="noopener">Google Agenda</a>
+        </div>
+        <p class="hint">Agenda du téléphone : avec un rappel la veille. Marche sur iPhone et Android.</p>`;
+    })() : ''}
     <div class="form-actions" style="margin-top:22px"><button class="btn" data-act="event-edit">Modifier</button></div>`;
+}
+
+// Liens d'export : fichier .ics (avec rappel la veille) et modèle Google Agenda.
+function calLinks(ev) {
+  const title = `Hysteria : ${evTitle(ev)}`;
+  const time = /^\d{2}:\d{2}$/.test(ev.time || '') ? ev.time : '20:00';
+  const details = ev.notes || '';
+  const ics = '/api/ics?' + new URLSearchParams({ id: ev.id, t: title, d: ev.date, h: time, dur: '180', loc: ev.place || '', desc: details }).toString();
+  const start = parseISO(ev.date);
+  const [hh, mm] = time.split(':').map(Number);
+  start.setHours(hh, mm, 0, 0);
+  const end = new Date(start.getTime() + 3 * 3600000);
+  const f = (d) => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+  const gcal = 'https://calendar.google.com/calendar/render?' + new URLSearchParams({
+    action: 'TEMPLATE', text: title, dates: `${f(start)}/${f(end)}`, ctz: 'Europe/Paris', location: ev.place || '', details,
+  }).toString();
+  return { ics, gcal };
 }
 
 function sheetEventEdit(s) {
@@ -1094,11 +1283,221 @@ function sheetProfile() {
       <div class="form-actions"><button class="btn primary" data-act="save-role">Enregistrer</button></div>` : ''}
     <h3 class="block-title">Changer de profil</h3>
     <div class="chips">${MEMBERS.map((m) => `<button class="chip" data-act="pick-me" data-id="${m.id}" aria-pressed="${app.me === m.id}">${esc(m.name)}</button>`).join('')}</div>
+    <h3 class="block-title">Apparence</h3>
+    <div class="seg theme-seg" role="group" aria-label="Apparence">
+      ${[['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Nuit']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${app.theme === v}">${l}</button>`).join('')}
+    </div>
+    <p class="hint">Auto suit le réglage de ton téléphone. Réglage propre à cet appareil.</p>
     ${app.mode === 'local' ? `
       <h3 class="block-title">${PREVIEW ? 'Aperçu' : 'Mode local'}</h3>
       <p class="empty-note" style="margin:0 0 12px">Tout ce que tu changes ici reste sur cet appareil. Tu peux repartir du répertoire de départ quand tu veux.</p>
       <button class="btn danger" data-act="reset-local">Repartir de zéro</button>` : ''}`;
 }
+
+/* ----- Activité ----- */
+function sheetActivity() {
+  const list = Object.values(D('log')).filter((e) => e && e.ts).sort((a, b) => b.ts - a.ts);
+  const head = sheetHead('Activité', 'Ce que le groupe a fait dernièrement');
+  if (!list.length) return head + '<p class="empty-note">Rien pour l’instant. Les ajouts de morceaux, les niveaux, les dates calées et les notes apparaîtront ici.</p>';
+  const today = todayISO();
+  const groups = [];
+  list.forEach((e) => {
+    const iso = toISO(new Date(e.ts));
+    const label = iso === today ? 'Aujourd’hui' : iso === addDays(today, -1) ? 'Hier' : fmtDay.format(parseISO(iso));
+    if (!groups.length || groups[groups.length - 1].label !== label) groups.push({ label, items: [] });
+    groups[groups.length - 1].items.push(e);
+  });
+  return head + groups.map((g) => `
+    <h3 class="block-title" style="text-transform:none">${esc(g.label.charAt(0).toUpperCase() + g.label.slice(1))}</h3>
+    <ul class="acts">${g.items.map((e) => {
+      const d = new Date(e.ts);
+      const fresh = e.by !== app.me && e.ts > app.seenBefore;
+      return `<li class="act${fresh ? ' fresh' : ''}"><i style="background:${memberColor(e.by)}"></i><p><strong>${esc(memberName(e.by))}</strong> ${esc(e.text)}</p><time>${pad(d.getHours())}:${pad(d.getMinutes())}</time></li>`;
+    }).join('')}</ul>`).join('');
+}
+
+/* ----- Mode scène ----- */
+function stageIds() {
+  const g = app.stage && D('gigs')[app.stage.gigId];
+  const songs = D('songs');
+  return g ? (g.songs || []).filter((id) => songs[id]) : [];
+}
+function renderStage() {
+  const el = $('#stage');
+  const st = app.stage;
+  if (!st || !app.view) {
+    if (!el.hidden) { el.hidden = true; el.innerHTML = ''; }
+    return;
+  }
+  const g = D('gigs')[st.gigId];
+  const ids = stageIds();
+  if (!g || !ids.length) { stageExit(); return; }
+  st.idx = Math.max(0, Math.min(st.idx, ids.length - 1));
+  const songs = D('songs');
+  const s = songs[ids[st.idx]];
+  const prev = songs[ids[st.idx - 1]];
+  const nxt = songs[ids[st.idx + 1]];
+  const tr = nxt ? (g.transitions || {})[s.id + '__' + nxt.id] : null;
+  const playing = metro.playing && metro.songId === s.id;
+  const tune = tuningOf(s);
+  const tuneChanged = !!prev && tuningOf(prev) !== tune;
+  const nxtChange = nxt && (tuningOf(nxt) !== tune || (nxt.capo || 0) !== (s.capo || 0));
+  const html = `
+    <div class="st-top">
+      <button class="st-quit" data-act="stage-exit">${ICON.prev}Quitter</button>
+      <span class="st-gig">${esc(g.name)}</span>
+      <span class="st-pos"><b>${st.idx + 1}</b> / ${ids.length}</span>
+    </div>
+    <div class="st-body">
+      <div>
+        <h2 class="st-title">${esc(s.title)}</h2>
+        <div class="st-artist" style="margin-top:6px">${esc(s.artist)}</div>
+      </div>
+      <div class="st-stats">
+        ${s.bpm ? `<div><b>${s.bpm}</b><small>BPM</small></div>` : ''}
+        ${s.key ? `<div><b class="word">${esc(s.key)}</b><small>Tonalité</small></div>` : ''}
+        <div><b class="word${tuneChanged ? ' warn' : ''}">${esc(tune || 'Standard')}</b><small>Accordage${tuneChanged ? ', ça change' : ''}</small></div>
+        ${s.capo > 0 ? `<div><b>${s.capo}</b><small>Capo</small></div>` : ''}
+      </div>
+      <div class="st-click">
+        <button class="st-btn${playing ? ' on' : ''}" data-act="stage-click" ${s.bpm ? '' : 'disabled'}>${playing ? ICON.stop + 'Arrêter le click' : ICON.play + (s.bpm ? 'Lancer le click' : 'Pas de tempo')}</button>
+        ${playing ? '<div class="beats" aria-hidden="true"><i class="accent"></i><i></i><i></i><i></i></div>' : ''}
+        <button class="st-btn" data-act="stage-auto" aria-pressed="${!!st.auto}" title="Lance le click tout seul à chaque morceau">Click auto ${st.auto ? 'activé' : 'désactivé'}</button>
+        <button class="st-btn" data-act="stage-lyrics" aria-pressed="${!!st.lyrics}">Paroles</button>
+      </div>
+      ${s.chart ? `<pre class="st-chart">${esc(s.chart)}</pre>` : ''}
+      ${st.lyrics ? `<div class="st-lyr">${lyricsBody(s, 'st-lyrics')}</div>` : ''}
+      <div class="st-next">
+        ${tr ? `<div class="st-tr"><small>Transition</small><b>${esc(tr.title || 'Transition')}</b>${tr.text ? `<p>${esc(tr.text)}</p>` : ''}</div>` : ''}
+        ${nxt ? `<div class="st-nx"><div class="nx-main"><small>Ensuite</small><b>${esc(nxt.title)}</b></div>
+            <div class="nx-meta">${[nxt.bpm ? nxt.bpm + ' bpm' : '', esc(nxt.key || '')].filter(Boolean).join(' · ')}${nxtChange ? `<span class="nx-warn">${esc([tuningOf(nxt) || 'Standard', nxt.capo > 0 ? 'capo ' + nxt.capo : 'sans capo'].join(', '))}</span>` : ''}</div></div>`
+          : '<div class="st-end">Dernier morceau.</div>'}
+      </div>
+    </div>
+    <div class="st-nav">
+      <button data-act="stage-go" data-v="-1" ${st.idx ? '' : 'disabled'} aria-label="Morceau précédent">${ICON.prev}Précédent</button>
+      <button data-act="stage-go" data-v="1" ${nxt ? '' : 'disabled'} aria-label="Morceau suivant">Suivant${ICON.next}</button>
+    </div>
+    <div class="st-hint">Glisse vers la gauche ou la droite, ou utilise un pédalier (flèches, page suivante).</div>`;
+  const body = el.querySelector('.st-body');
+  const keep = st.shown === s.id && body ? body.scrollTop : 0;
+  el.innerHTML = html;
+  el.hidden = false;
+  const nb = el.querySelector('.st-body');
+  if (nb) nb.scrollTop = keep;
+  st.shown = s.id;
+}
+async function keepAwake(on) {
+  try {
+    if (on && !app.wake && navigator.wakeLock) {
+      app.wake = await navigator.wakeLock.request('screen');
+      app.wake.addEventListener('release', () => { app.wake = null; });
+    } else if (!on && app.wake) {
+      const w = app.wake;
+      app.wake = null;
+      await w.release();
+    }
+  } catch { app.wake = null; }
+}
+function stageGo(d) {
+  const st = app.stage;
+  if (!st) return;
+  const ids = stageIds();
+  const n = st.idx + d;
+  if (n < 0 || n >= ids.length) return;
+  st.idx = n;
+  const s = D('songs')[ids[n]];
+  if (st.auto && s.bpm) metro.start(s.id, s.bpm);
+  else if (metro.playing) metro.stop();
+  else renderStage();
+}
+function stageExit() {
+  if (!app.stage) return;
+  app.stage = null;
+  if (metro.playing) metro.stop();
+  keepAwake(false);
+  if (!app.sheet) document.body.style.overflow = '';
+  renderStage();
+}
+
+/* ----- Setlist imprimable ----- */
+function printSetlist() {
+  const g = currentGig();
+  if (!g) return;
+  const songs = D('songs');
+  const ids = (g.songs || []).filter((id) => songs[id]);
+  if (!ids.length) { toast('La setlist est vide'); return; }
+  const tr = g.transitions || {};
+  const rows = ids.map((id, i) => {
+    const s = songs[id];
+    const t = ids[i + 1] && tr[id + '__' + ids[i + 1]];
+    const meta = [s.bpm ? s.bpm + ' bpm' : '', s.key || ''].filter(Boolean).join(' · ');
+    const tune = tuneBits(s).join(', ');
+    return `<li class="pr-row"><span class="pr-n">${i + 1}</span><span class="pr-t">${esc(s.title)}<small>${esc(s.artist)}</small></span><span class="pr-m">${esc(meta)}${tune ? `<em>${esc(tune)}</em>` : ''}</span></li>`
+      + (t ? `<li class="pr-tr">↳ ${esc(t.title || 'Transition')}${t.text ? ' : ' + esc(t.text) : ''}</li>` : '');
+  }).join('');
+  const total = ids.reduce((n, id) => n + (songs[id].duration || 0), 0);
+  $('#printArea').innerHTML = `
+    <div class="pr-head"><div class="pr-band">Hysteria</div><div class="pr-gig"><strong>${esc(g.name)}</strong>${g.date ? '<br>' + esc(fmtDay.format(parseISO(g.date))) : ''}</div></div>
+    <ol class="pr-list">${rows}</ol>
+    <div class="pr-foot">${plural(ids.length, 'morceau', 'morceaux')}${total ? `, environ ${Math.round(total / 60)} min` : ''}</div>`;
+  if (PREVIEW) { toast('L’impression marche sur le site en ligne'); return; }
+  window.print();
+}
+
+/* ----- Couleur de la pochette ----- */
+// Tire la couleur marquante d'une pochette (via /api/cover, pour avoir le droit de lire les pixels).
+const toneTried = new Set();
+function pickTone(px) {
+  const buckets = new Map();
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i + 3] < 200) continue;
+    const r = px[i], g = px[i + 1], b = px[i + 2];
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    const l = (max + min) / 510;
+    const sat = max === min ? 0 : (max - min) / (255 - Math.abs(max + min - 255));
+    const w = 0.3 + sat * Math.max(0, 1 - Math.abs(l - 0.5) * 1.6);
+    const k = ((r >> 5) << 6) | ((g >> 5) << 3) | (b >> 5);
+    const e = buckets.get(k) || { r: 0, g: 0, b: 0, n: 0, w: 0 };
+    e.r += r; e.g += g; e.b += b; e.n++; e.w += w;
+    buckets.set(k, e);
+  }
+  let best = null;
+  for (const e of buckets.values()) if (!best || e.w > best.w) best = e;
+  if (!best) return null;
+  const hx = (v) => Math.round(v / best.n).toString(16).padStart(2, '0');
+  return '#' + hx(best.r) + hx(best.g) + hx(best.b);
+}
+function ensureTone(s) {
+  if (PREVIEW || app.mode === 'local' || !s || isTone(s.tone) || !safeUrl(s.cover) || toneTried.has(s.id + s.cover)) return;
+  toneTried.add(s.id + s.cover);
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 32;
+      const x = c.getContext('2d', { willReadFrequently: true });
+      x.drawImage(img, 0, 0, 32, 32);
+      const tone = pickTone(x.getImageData(0, 0, 32, 32).data);
+      const cur = D('songs')[s.id];
+      if (tone && cur && cur.cover === s.cover && !isTone(cur.tone)) commit([{ op: 'set', path: ['songs', s.id, 'tone'], value: tone }]);
+    } catch {}
+  };
+  img.src = '/api/cover?u=' + encodeURIComponent(s.cover);
+}
+
+/* ----- Thème ----- */
+const darkMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  const root = document.documentElement;
+  if (app.theme === 'light' || app.theme === 'dark') { root.dataset.theme = app.theme; app.themeSet = true; }
+  else if (app.themeSet) { delete root.dataset.theme; app.themeSet = false; }
+  const dark = root.dataset.theme === 'dark' || (root.dataset.theme !== 'light' && !!darkMQ && darkMQ.matches);
+  const m = document.querySelector('meta[name="theme-color"]');
+  if (m) m.content = dark ? '#20241d' : '#cfd4cb';
+}
+if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener('change', applyTheme);
 
 /* ----- Écrans d'accueil ----- */
 function renderOverlay(wrong) {
@@ -1176,6 +1575,14 @@ const actions = {
     window.scrollTo({ top: 0 });
   },
   'rep-sort'(el) { app.repSort = el.dataset.v; renderView(); },
+  'rep-view'(el) { app.repView = el.dataset.v === 'grid' ? 'grid' : 'list'; LS.set('hy.repView', app.repView); renderView(); },
+  'theme'(el) { app.theme = el.dataset.v; LS.set('hy.theme', app.theme); applyTheme(); renderSheet(); },
+  'open-activity'() {
+    app.seenBefore = app.seen;
+    markSeen();
+    openSheet({ type: 'activity' });
+    renderHeader();
+  },
 
   /* Morceaux */
   'open-song'(el) { openSheet({ type: 'song', id: el.dataset.id }); },
@@ -1199,7 +1606,7 @@ const actions = {
   'song-edit'() {
     const s = D('songs')[app.sheet.id];
     clearDrafts('song.');
-    Object.assign(app.drafts, { 'song.title': s.title, 'song.artist': s.artist, 'song.bpm': s.bpm ? String(s.bpm) : '', 'song.key': s.key || '', 'song.link': s.link || '', 'song.cover': s.cover || '', 'song.duration': s.duration ? String(s.duration) : '' });
+    Object.assign(app.drafts, { 'song.title': s.title, 'song.artist': s.artist, 'song.bpm': s.bpm ? String(s.bpm) : '', 'song.key': s.key || '', 'song.link': s.link || '', 'song.cover': s.cover || '', 'song.duration': s.duration ? String(s.duration) : '', 'song.tuning': TUNINGS.includes(s.tuning) ? s.tuning : 'Standard', 'song.capo': String(s.capo || 0) });
     app.sheet.edit = true;
     renderSheet();
   },
@@ -1217,16 +1624,20 @@ const actions = {
       link: draft('song.link').trim() || ytMusic(artist + ' ' + title),
       cover: safeUrl(draft('song.cover')),
       duration: parseInt(draft('song.duration'), 10) || null,
+      tuning: TUNINGS.includes(draft('song.tuning')) ? draft('song.tuning') : 'Standard',
+      capo: Math.max(0, Math.min(12, parseInt(draft('song.capo', '0'), 10) || 0)),
     };
     if (app.sheet.id) {
       const id = app.sheet.id;
+      const old = D('songs')[id] || {};
+      if (old.cover !== fields.cover) fields.tone = '';
       commit(Object.entries(fields).map(([k, v]) => ({ op: 'set', path: ['songs', id, k], value: v })));
       if (metro.playing && metro.songId === id && fields.bpm) { metro.bpm = fields.bpm; renderPlaybar(); }
       app.sheet.edit = false;
       renderSheet();
     } else {
       const id = newId('s');
-      commit([{ op: 'set', path: ['songs', id], value: { id, ...fields, levels: {} } }]);
+      commit([{ op: 'set', path: ['songs', id], value: { id, ...fields, levels: {} } }, ...logOps(`a ajouté « ${title} » au répertoire`, 'song-add', 'a ajouté des morceaux au répertoire')]);
       openSheet({ type: 'song', id });
       toast('Morceau ajouté au répertoire');
     }
@@ -1234,20 +1645,24 @@ const actions = {
   },
   async 'song-delete'() {
     const s = D('songs')[app.sheet.id];
-    if (!s || !(await askConfirm(`Supprimer « ${s.title} » du répertoire pour tout le monde ?`))) return;
+    if (!s || !(await askConfirm(`Supprimer « ${s.title} » du répertoire pour tout le monde ?`))) return;
     if (metro.songId === s.id) metro.stop();
     const ops = [{ op: 'del', path: ['songs', s.id] }];
     Object.values(D('notes')).forEach((n) => { if (n.songId === s.id) ops.push({ op: 'del', path: ['notes', n.id] }); });
     Object.values(D('gigs')).forEach((g) => {
       if ((g.songs || []).includes(s.id)) ops.push({ op: 'set', path: ['gigs', g.id, 'songs'], value: g.songs.filter((x) => x !== s.id) });
     });
+    ops.push(...logOps(`a supprimé « ${s.title} » du répertoire`));
     closeSheet();
     commit(ops);
     toast('Morceau supprimé');
   },
   'set-level'(el) {
     if (!app.me) return;
-    commit([{ op: 'set', path: ['songs', app.sheet.id, 'levels', app.me], value: Number(el.dataset.v) }]);
+    const song = D('songs')[app.sheet.id];
+    const v = Number(el.dataset.v);
+    if (!song || ((song.levels || {})[app.me] || 0) === v) return;
+    commit([{ op: 'set', path: ['songs', song.id, 'levels', app.me], value: v }, ...logOps(`a mis « ${levelLabel(v)} » sur « ${song.title} »`, 'lv:' + song.id)]);
   },
   'metro-toggle'() {
     const s = D('songs')[app.sheet.id];
@@ -1261,7 +1676,27 @@ const actions = {
     if (!text) { toast('Écris la note avant de l’ajouter'); return; }
     const id = newId('n');
     delete app.drafts['note.' + songId];
-    commit([{ op: 'set', path: ['notes', id], value: { id, songId, text, by: app.me, ts: Date.now() } }]);
+    const title = (D('songs')[songId] || {}).title || '';
+    commit([{ op: 'set', path: ['notes', id], value: { id, songId, text, by: app.me, ts: Date.now() } }, ...logOps(`a laissé une note sur « ${title} »`, 'note:' + songId, `a laissé des notes sur « ${title} »`)]);
+  },
+  'chart-edit'() {
+    const song = D('songs')[app.sheet.id];
+    if (!song) return;
+    app.chartEdit = song.id;
+    app.drafts['chart.' + song.id] = song.chart || '';
+    renderSheet();
+    setTimeout(() => { const t = $('#chartText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 40);
+  },
+  'chart-cancel'() { if (app.chartEdit) delete app.drafts['chart.' + app.chartEdit]; app.chartEdit = null; renderSheet(); },
+  'chart-save'() {
+    const song = D('songs')[app.chartEdit];
+    if (!song) return;
+    const text = draft('chart.' + song.id).replace(/\s+$/, '').slice(0, 8000);
+    delete app.drafts['chart.' + song.id];
+    app.chartEdit = null;
+    if (text === (song.chart || '')) { renderSheet(); return; }
+    commit([{ op: 'set', path: ['songs', song.id, 'chart'], value: text }, ...(text ? logOps(`a mis à jour la grille de « ${song.title} »`, 'chart:' + song.id) : [])]);
+    toast(text ? 'Grille enregistrée' : 'Grille effacée');
   },
   async 'note-del'(el) {
     const n = D('notes')[el.dataset.id];
@@ -1293,7 +1728,7 @@ const actions = {
     } else {
       const nid = newId('g');
       setGig(nid);
-      commit([{ op: 'set', path: ['gigs', nid], value: { id: nid, name, date: date || '', songs: [], gear: {}, by: app.me, ts: Date.now() } }]);
+      commit([{ op: 'set', path: ['gigs', nid], value: { id: nid, name, date: date || '', songs: [], gear: {}, by: app.me, ts: Date.now() } }, ...logOps(`a créé la setlist « ${name} »`)]);
       toast('Setlist créée');
     }
     clearDrafts('gig.');
@@ -1301,7 +1736,7 @@ const actions = {
   },
   async 'gig-delete'() {
     const g = D('gigs')[app.sheet.id];
-    if (!g || !(await askConfirm(`Supprimer le concert « ${g.name} », sa setlist et sa liste de matos ?`))) return;
+    if (!g || !(await askConfirm(`Supprimer le concert « ${g.name} », sa setlist et sa liste de matos ?`))) return;
     closeSheet();
     setGig(null);
     commit([{ op: 'del', path: ['gigs', g.id] }]);
@@ -1314,7 +1749,9 @@ const actions = {
     const list = (g.songs || []).slice();
     const i = list.indexOf(el.dataset.id);
     if (i >= 0) list.splice(i, 1); else list.push(el.dataset.id);
-    commit([{ op: 'set', path: ['gigs', g.id, 'songs'], value: list }]);
+    const song = D('songs')[el.dataset.id];
+    const log = i < 0 && song ? logOps(`a ajouté « ${song.title} » à la setlist « ${g.name} »`, 'gs:' + g.id, `a ajouté des morceaux à la setlist « ${g.name} »`) : [];
+    commit([{ op: 'set', path: ['gigs', g.id, 'songs'], value: list }, ...log]);
   },
   'edit-transition'(el) {
     const g = currentGig();
@@ -1333,7 +1770,9 @@ const actions = {
     const text = draft('tr.text').trim();
     const key = app.sheet.from + '__' + app.sheet.to;
     if (!title && !text) { toast('Écris au moins quelques mots'); return; }
-    commit([{ op: 'set', path: ['gigs', g.id, 'transitions', key], value: { title, text, by: app.me, ts: Date.now() } }]);
+    const songs = D('songs');
+    const a = (songs[app.sheet.from] || {}).title || '', b = (songs[app.sheet.to] || {}).title || '';
+    commit([{ op: 'set', path: ['gigs', g.id, 'transitions', key], value: { title, text, by: app.me, ts: Date.now() } }, ...logOps(`a noté la transition entre « ${a} » et « ${b} »`, 'tr:' + key)]);
     clearDrafts('tr.');
     closeSheet();
   },
@@ -1365,6 +1804,22 @@ const actions = {
     commit([on ? { op: 'del', path: ['avail', iso, app.me] } : { op: 'set', path: ['avail', iso, app.me], value: true }]);
   },
   'select-day'(el) { app.calSel = el.dataset.date; renderView(); },
+  'repeat-avail'(el) {
+    const iso = app.calSel;
+    if (!app.me || !iso || iso < todayISO()) return;
+    const on = el.dataset.v === 'on';
+    const wd = fmtWeekday.format(parseISO(iso));
+    const ops = [];
+    for (let w = 0; w < 13; w++) {
+      const d = addDays(iso, 7 * w);
+      const has = availOn(d).includes(app.me);
+      if (on && !has) ops.push({ op: 'set', path: ['avail', d, app.me], value: true });
+      if (!on && has) ops.push({ op: 'del', path: ['avail', d, app.me] });
+    }
+    if (!ops.length) { toast(on ? `Tu es déjà dispo tous les ${wd}s` : `Rien à enlever`); return; }
+    commit([...ops, ...logOps(on ? `est dispo tous les ${wd}s` : `n’est plus dispo les ${wd}s`, 'rep:' + wd)]);
+    toast(on ? `Dispo tous les ${wd}s jusqu’au ${fmtShort.format(parseISO(addDays(iso, 84)))}` : `Plus dispo les ${wd}s`);
+  },
   'cal-mode'(el) { app.calMode = el.dataset.v; renderView(); },
   'save-avail-note'() {
     const iso = app.calSel;
@@ -1411,7 +1866,8 @@ const actions = {
       renderSheet();
     } else {
       const id = newId('e');
-      commit([{ op: 'set', path: ['events', id], value: { id, ...fields, by: app.me, ts: Date.now() } }]);
+      const when = fmtDay.format(parseISO(date)) + (fields.time ? ' à ' + fmtTime(fields.time) : '');
+      commit([{ op: 'set', path: ['events', id], value: { id, ...fields, by: app.me, ts: Date.now() } }, ...logOps(`a calé ${fields.type === 'concert' ? 'un concert' : 'une répète'} le ${when}`)]);
       closeSheet();
       toast(fields.type === 'concert' ? 'Concert calé' : 'Répète calée');
     }
@@ -1424,6 +1880,47 @@ const actions = {
     commit([{ op: 'del', path: ['events', e.id] }]);
   },
   'toggle-past'() { app.showPast = !app.showPast; renderView(); },
+  'ics-offline'() { toast('L’ajout à l’agenda marche sur le site en ligne'); },
+
+  /* Mode scène, impression */
+  'stage-open'() {
+    const g = currentGig();
+    if (!g || !(g.songs || []).some((id) => D('songs')[id])) { toast('La setlist est vide'); return; }
+    if (metro.playing) metro.stop();
+    app.stage = { gigId: g.id, idx: 0, auto: LS.get('hy.stageAuto', false), lyrics: LS.get('hy.stageLyrics', false) };
+    document.body.style.overflow = 'hidden';
+    keepAwake(true);
+    renderStage();
+    const q = $('#stage .st-nav [data-v="1"]');
+    if (q) q.focus({ preventScroll: true });
+  },
+  'stage-exit'() { stageExit(); },
+  'stage-go'(el) { stageGo(Number(el.dataset.v)); },
+  'stage-click'() {
+    const ids = stageIds();
+    const s = app.stage && D('songs')[ids[app.stage.idx]];
+    if (s && s.bpm) metro.toggle(s.id, s.bpm);
+  },
+  'stage-auto'() {
+    if (!app.stage) return;
+    app.stage.auto = !app.stage.auto;
+    LS.set('hy.stageAuto', app.stage.auto);
+    const s = D('songs')[stageIds()[app.stage.idx]];
+    if (app.stage.auto && s && s.bpm && !(metro.playing && metro.songId === s.id)) metro.start(s.id, s.bpm);
+    else renderStage();
+  },
+  'stage-lyrics'() {
+    if (!app.stage) return;
+    app.stage.lyrics = !app.stage.lyrics;
+    LS.set('hy.stageLyrics', app.stage.lyrics);
+    renderStage();
+  },
+  'print-setlist'() { printSetlist(); },
+  'lyrics-toggle'() { app.showLyrics = !app.showLyrics; LS.set('hy.showLyrics', app.showLyrics); renderSheet(); },
+  'lyrics-retry'() {
+    const s = (app.sheet && app.sheet.type === 'song' && D('songs')[app.sheet.id]) || (app.stage && D('songs')[stageIds()[app.stage.idx]]);
+    if (s) { loadLyrics(s, true); renderSheet(); renderStage(); }
+  },
 
   /* Matos */
   'matos-view'(el) { app.matosView = el.dataset.v; LS.set('hy.matosView', app.matosView); renderView(); },
@@ -1455,7 +1952,7 @@ const actions = {
       closeSheet();
     } else {
       const id = newId('m');
-      commit([{ op: 'set', path: ['gear', id], value: { id, ...fields, ts: Date.now() } }]);
+      commit([{ op: 'set', path: ['gear', id], value: { id, ...fields, ts: Date.now() } }, ...logOps(`a ajouté « ${name} » à l’inventaire`, 'gear-add', 'a ajouté du matos à l’inventaire')]);
       // On garde la catégorie et le propriétaire pour enchaîner les ajouts.
       app.drafts = { ...app.drafts, 'gear.name': '', 'gear.qty': '1', 'gear.details': '' };
       renderSheet();
@@ -1467,7 +1964,7 @@ const actions = {
   },
   async 'gear-delete'() {
     const x = D('gear')[app.sheet.id];
-    if (!x || !(await askConfirm(`Supprimer « ${x.name} » de l’inventaire ?`))) return;
+    if (!x || !(await askConfirm(`Supprimer « ${x.name} » de l’inventaire ?`))) return;
     const ops = [{ op: 'del', path: ['gear', x.id] }];
     Object.values(D('gigs')).forEach((g) => { if (g.gear && x.id in g.gear) ops.push({ op: 'del', path: ['gigs', g.id, 'gear', x.id] }); });
     closeSheet();
@@ -1618,6 +2115,12 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (app.stage) {
+    const k = e.key;
+    if (k === 'Escape') { e.preventDefault(); stageExit(); return; }
+    if (['ArrowRight', 'ArrowDown', 'PageDown'].includes(k)) { e.preventDefault(); stageGo(1); return; }
+    if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(k)) { e.preventDefault(); stageGo(-1); return; }
+  }
   if (e.key === 'Escape') {
     if (!$('#confirm').hidden && askConfirm.cancel) { askConfirm.cancel(); return; }
     if (app.sheet) { closeSheet(); return; }
@@ -1649,8 +2152,24 @@ document.addEventListener('input', onField);
 document.addEventListener('error', (e) => { if (e.target && e.target.classList && e.target.classList.contains('cov-img')) e.target.remove(); }, true);
 document.addEventListener('change', onField);
 
+// Mode scène : glisser à gauche ou à droite pour changer de morceau.
+const swipe = { x: null };
+$('#stage').addEventListener('pointerdown', (e) => {
+  if (e.target.closest('button')) { swipe.x = null; return; }
+  Object.assign(swipe, { x: e.clientX, y: e.clientY, t: Date.now() });
+});
+$('#stage').addEventListener('pointerup', (e) => {
+  if (swipe.x == null) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  swipe.x = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - swipe.t < 900) stageGo(dx < 0 ? 1 : -1);
+});
+$('#stage').addEventListener('pointercancel', () => { swipe.x = null; });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && app.stage) keepAwake(true); });
+
 /* ================= Démarrage ================= */
 if (PREVIEW) $('#previewBanner').hidden = false;
+applyTheme();
 renderAll();
 if (PREVIEW || location.protocol === 'file:') goLocal();
 else {
