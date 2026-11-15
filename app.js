@@ -72,13 +72,13 @@ function loadLyrics(s, retry) {
     .finally(() => { renderSheet(); renderStage(); });
 }
 function lyricsBody(s, cls = 'lyrics') {
-  if (app.mode === 'local') return '<p class="empty-note">Les paroles s’affichent sur le site en ligne.</p>';
+  if (app.mode === 'local') return '<p class="empty-note">Disponible sur le site en ligne.</p>';
   loadLyrics(s);
   const l = app.lyrics[lyricsKey(s)] || { state: 'loading' };
-  if (l.state === 'loading') return '<p class="empty-note">Recherche des paroles…</p>';
-  if (l.state === 'error') return '<p class="empty-note">La recherche de paroles ne répond pas. <button class="link-btn" data-act="lyrics-retry">Réessayer</button></p>';
-  if (l.state === 'none') return '<p class="empty-note">Pas trouvées automatiquement. Le bouton Paroles (Genius) au-dessus devrait les avoir.</p>';
-  if (l.instrumental || !l.text) return '<p class="empty-note">Morceau instrumental, pas de paroles.</p>';
+  if (l.state === 'loading') return '<p class="empty-note">Chargement…</p>';
+  if (l.state === 'error') return '<p class="empty-note">Paroles indisponibles. <button class="link-btn" data-act="lyrics-retry">Réessayer</button></p>';
+  if (l.state === 'none') return '<p class="empty-note">Paroles introuvables.</p>';
+  if (l.instrumental || !l.text) return '<p class="empty-note">Instrumental.</p>';
   return `<pre class="${cls}">${esc(l.text)}</pre>`;
 }
 
@@ -210,12 +210,11 @@ function cpEditor(song) {
   const shift = Number(song.shift) || 0;
   if (ed.raw) {
     return `
-      <p class="hint" style="margin-top:0">Écris l’accord entre crochets juste devant le mot : <code>[Am]Bonjour</code>. Une ligne qui commence par <code>#</code> est un titre de partie (<code># Refrain</code>).${shift ? ' Les accords sont ceux que vous jouez (tona ' + shiftLabel(song) + ').' : ''}</p>
+      <p class="hint" style="margin-top:0"><code>[Am]mot</code> pour un accord, <code># Refrain</code> pour une partie.</p>
       <textarea class="input chart-input" id="cpRaw" data-draft="cp.raw" spellcheck="false" placeholder="# Couplet&#10;[Am]Première ligne des [G]paroles">${esc(draft('cp.raw'))}</textarea>
       <div class="chart-actions">
-        <button class="btn primary" data-act="cp-save">Enregistrer</button>
+        <button class="btn primary" data-act="cp-save">Terminé</button>
         <button class="btn" data-act="cp-raw">Placer en touchant les mots</button>
-        <button class="btn ghost" data-act="cp-cancel">Annuler</button>
       </div>`;
   }
   const sel = ed.sel;
@@ -223,13 +222,14 @@ function cpEditor(song) {
   const recent = [...new Set(shown.flatMap((l) => (l.chunks || []).map((c) => c.ch).filter(Boolean)))].slice(0, 12);
   const word = sel ? ((ed.lines[sel.l] || {}).chunks || [])[sel.c] : null;
   return `
-    <p class="hint" style="margin-top:0">Touche un mot pour poser l’accord au-dessus. Les accords suivent la tona jouée.</p>
+    <div class="cp-bar">
+      <span>Touche un mot pour poser un accord. Enregistré tout seul.</span>
+      <button class="btn small primary" data-act="cp-save">Terminé</button>
+    </div>
     ${cpHtml(ed.lines, shift, { edit: true, sel: sel ? sel.l + ':' + sel.c : '' })}
     <div class="chart-actions">
-      <button class="btn primary" data-act="cp-save">Enregistrer</button>
-      <button class="btn" data-act="cp-raw">Modifier le texte</button>
-      <button class="btn ghost" data-act="cp-cancel">Annuler</button>
-      ${song.sheet ? '<button class="btn ghost danger" data-act="cp-reset">Effacer notre version</button>' : ''}
+      <button class="btn small" data-act="cp-raw">Modifier le texte</button>
+      ${song.sheet ? '<button class="btn small ghost danger" data-act="cp-reset">Effacer notre version</button>' : ''}
     </div>
     ${word ? `
     <div class="cp-picker">
@@ -246,24 +246,22 @@ function songSheetBlock(song, stage) {
   if (!stage && app.cpEdit && app.cpEdit.id === song.id) return cpEditor(song);
   if (song.sheet) {
     if (stage) return `${shift ? `<div class="st-cs-meta">Tona ${shiftLabel(song)}</div>` : ''}${cpHtml(cpParse(song.sheet), shift, { stage: true })}`;
-    return `<div class="cs-tools"><span class="cs-chip">Notre version</span>${shift ? `<span class="cs-chip">Tona ${shiftLabel(song)}</span>` : ''}</div>
-      ${cpHtml(cpParse(song.sheet), shift)}
-      <div class="chart-actions"><button class="btn small" data-act="cp-edit">Modifier les accords</button></div>`;
+    return `${shift ? `<div class="cs-tools"><span class="cs-chip">Tona ${shiftLabel(song)}</span></div>` : ''}${cpHtml(cpParse(song.sheet), shift)}`;
   }
   if (stage) return chordBlock(song, true);
-  return `${chordBlock(song)}<div class="chart-actions"><button class="btn small" data-act="cp-edit">${ICON.plus}Placer nos accords</button></div>`;
+  return chordBlock(song);
 }
 
 // Bloc « Accords et paroles » de la fiche (et du mode scène). Sans grille trouvée, on montre les paroles seules.
 function chordBlock(s, stage) {
-  if (app.mode === 'local') return '<p class="empty-note">Les accords et les paroles s’affichent sur le site en ligne.</p>';
+  if (app.mode === 'local') return '<p class="empty-note">Disponible sur le site en ligne.</p>';
   loadSheet(s);
   const sh = app.sheets[lyricsKey(s)] || { state: 'loading' };
-  if (sh.state === 'loading') return '<p class="empty-note">Chargement des accords et des paroles…</p>';
+  if (sh.state === 'loading') return '<p class="empty-note">Chargement…</p>';
   if (sh.state !== 'ok') {
     const why = sh.state === 'none'
-      ? 'Pas de grille d’accords trouvée pour ce morceau. Voici les paroles :'
-      : 'La grille d’accords n’a pas pu être chargée. <button class="link-btn" data-act="sheet-retry">Réessayer</button> En attendant, les paroles :';
+      ? 'Pas de grille trouvée. Les paroles :'
+      : 'Grille indisponible. <button class="link-btn" data-act="sheet-retry">Réessayer</button>';
     return `<p class="empty-note">${why}</p>${lyricsBody(s, stage ? 'st-lyrics' : 'lyrics')}`;
   }
   const shift = Math.max(-11, Math.min(11, Number(s.shift) || 0));
@@ -274,10 +272,11 @@ function chordBlock(s, stage) {
   return `
     ${bits.length ? `<div class="cs-tools">${bits.map((b) => `<span class="cs-chip">${esc(b)}</span>`).join('')}</div>` : ''}
     ${chordSheetHtml(sh, shift, 'chordsheet')}
-    <p class="hint">Version la mieux notée d’Ultimate Guitar${sh.rating ? ` (${String(sh.rating).replace('.', ',')}/5, ${sh.votes} votes)` : ''}${shift ? ', transposée selon votre tona' : ''}.</p>`;
+    <p class="hint">Ultimate Guitar${sh.rating ? ` · ${String(sh.rating).replace('.', ',')}/5` : ''}</p>`;
 }
 
 const ICON = {
+  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></svg>',
   stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>',
@@ -345,8 +344,7 @@ const app = {
   view: null,
   me: LS.get('hy.me', null),
   tab: LS.get('hy.tab', 'repertoire'),
-  repSort: 'az',
-  repDir: -1,
+  repSort: LS.get('hy.repSort', 'az'),
   query: '',
   gigId: LS.get('hy.gig', null),
   calMonth: monthOf(todayISO()),
@@ -785,8 +783,8 @@ function viewIdeas() {
       <button class="btn primary small" data-act="add-idea">${ICON.plus}Proposer un morceau</button>
     </div>
     ${repSeg()}
-    <p class="lede">Propose un morceau, chacun vote. Dès que ${NEED} personnes sur ${MEMBERS.length} sont pour, il passe tout seul au répertoire.</p>
-    ${list.length ? `<ul class="ideas">${rows}</ul>` : emptyCard('Aucune idée pour l’instant', 'Un morceau que tu aimerais reprendre ? Propose-le, les autres votent.', 'add-idea', 'Proposer un morceau')}`;
+    <p class="lede">${NEED} votes pour sur ${MEMBERS.length} : le morceau rejoint le répertoire.</p>
+    ${list.length ? `<ul class="ideas">${rows}</ul>` : emptyCard('Aucune idée pour l’instant', 'Propose un morceau, les autres votent.', 'add-idea', 'Proposer un morceau')}`;
 }
 
 function viewRepertoire() {
@@ -795,13 +793,15 @@ function viewRepertoire() {
   let list = all.slice();
   const q = app.query.trim().toLowerCase();
   if (q) list = list.filter((s) => (s.title + ' ' + s.artist).toLowerCase().includes(q));
-  if (app.repSort === 'work') {
-    list.sort((a, b) => ((a.levels || {})[app.me] || 0) - ((b.levels || {})[app.me] || 0) || avgLevel(a) - avgLevel(b) || byTitle(a, b));
-  }
-  if (app.repSort === 'band') {
-    // Avancement de tout le groupe : les plus prêts d'abord (ou l'inverse en retouchant le bouton).
-    list.sort((a, b) => (avgLevel(b) - avgLevel(a)) * (app.repDir < 0 ? 1 : -1) || byTitle(a, b));
-  }
+  const sorts = {
+    artist: (a, b) => (a.artist || '').localeCompare(b.artist || '', 'fr') || byTitle(a, b),
+    work: (a, b) => ((a.levels || {})[app.me] || 0) - ((b.levels || {})[app.me] || 0) || avgLevel(a) - avgLevel(b) || byTitle(a, b),
+    ready: (a, b) => avgLevel(b) - avgLevel(a) || byTitle(a, b),
+    behind: (a, b) => avgLevel(a) - avgLevel(b) || byTitle(a, b),
+    bpm: (a, b) => (a.bpm || 999) - (b.bpm || 999) || byTitle(a, b),
+    dur: (a, b) => (a.duration || 9999) - (b.duration || 9999) || byTitle(a, b),
+  };
+  if (sorts[app.repSort]) list.sort(sorts[app.repSort]);
   const n = all.length;
   const pct = n ? Math.round((all.reduce((t, s) => t + avgLevel(s), 0) / (n * 4)) * 100) : 0;
   const ready = all.filter((s) => MEMBERS.every((m) => ((s.levels || {})[m.id] || 0) >= 3)).length;
@@ -833,16 +833,16 @@ function viewRepertoire() {
     ${repSeg()}
     <div class="summary">
       <div class="pct">${pct}<small>%</small></div>
-      <div class="sum-line"><strong>${ready}</strong> sur ${plural(n, 'morceau', 'morceaux')} prêts pour tout le monde</div>
-      <div class="sum-line">Niveau moyen du groupe sur tout le répertoire</div>
+      <div class="sum-line"><strong>${ready}</strong> sur ${n} prêts pour tout le monde</div>
       <div class="meter" aria-hidden="true">${meter}</div>
     </div>
     <div class="toolbar">
-      <div class="seg" role="group" aria-label="Trier">
-        <button data-act="rep-sort" data-v="az" aria-pressed="${app.repSort === 'az'}">De A à Z</button>
-        <button data-act="rep-sort" data-v="work" aria-pressed="${app.repSort === 'work'}">À bosser</button>
-        <button data-act="rep-sort" data-v="band" aria-pressed="${app.repSort === 'band'}" title="Avancement de tout le groupe">Le groupe ${app.repSort === 'band' ? (app.repDir < 0 ? '↓' : '↑') : ''}</button>
-      </div>
+      <label class="sort">
+        <span>Trier</span>
+        <select data-commit="rep-sort" aria-label="Trier le répertoire">
+          ${[['az', 'Titre'], ['artist', 'Artiste'], ['ready', 'Les plus prêts (groupe)'], ['behind', 'À bosser (groupe)'], ['work', 'À bosser (moi)'], ['bpm', 'Tempo'], ['dur', 'Durée']].map(([v, l]) => `<option value="${v}" ${app.repSort === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
       <div class="seg icons" role="group" aria-label="Affichage">
         <button data-act="rep-view" data-v="list" aria-pressed="${!grid}" aria-label="En liste" title="En liste">${ICON.list}</button>
         <button data-act="rep-view" data-v="grid" aria-pressed="${grid}" aria-label="En mosaïque" title="En mosaïque">${ICON.grid}</button>
@@ -864,12 +864,16 @@ function gigChips() {
     </button>`).join('')}</div>`;
 }
 
+const gigEvent = (g) => Object.values(D('events')).filter((e) => e.gigId === g.id).sort((a, b) => a.date.localeCompare(b.date)).find((e) => e.date >= todayISO())
+  || Object.values(D('events')).find((e) => e.gigId === g.id);
 function gigHead(g, count, countLabel) {
+  const ev = gigEvent(g);
+  const when = ev ? `${fmtDay.format(parseISO(ev.date))}${ev.place ? ', ' + ev.place : ''}` : g.date ? fmtDay.format(parseISO(g.date)) : 'Date à définir';
   return `
     <div class="gig-head">
       <div class="gig-titles">
         <div class="gig-name">${esc(g.name)}</div>
-        <div class="gig-sub">${g.date ? esc(fmtDay.format(parseISO(g.date))) : 'Date à définir'}, ${esc(countLabel(count))}</div>
+        <div class="gig-sub">${ev ? `<button class="link-btn gig-when" data-act="open-event" data-id="${esc(ev.id)}">${ICON.cal}${esc(when)}</button>` : esc(when)} · ${esc(countLabel(count))}</div>
       </div>
       <button class="link-btn" data-act="edit-gig">Modifier</button>
     </div>`;
@@ -883,7 +887,7 @@ function viewSetlist() {
     </div>`;
   const g = currentGig();
   if (!g) {
-    return head + emptyCard('Pas encore de setlist', 'Crée la setlist d’un concert, ajoute des morceaux du répertoire, puis range-les dans l’ordre en les faisant glisser.', 'new-gig', 'Créer une setlist');
+    return head + emptyCard('Pas encore de setlist', 'Une setlist par concert, à ranger en faisant glisser les morceaux.', 'new-gig', 'Créer une setlist');
   }
   const entries = gigEntries(g);
   const tr = g.transitions || {};
@@ -935,7 +939,7 @@ function viewSetlist() {
       <button class="btn small primary" data-act="stage-open">${ICON.stage}Mode scène</button>
       <button class="btn small" data-act="print-setlist">${ICON.print}Imprimer</button>
     </div>` : ''}
-    ${entries.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Maintiens la poignée à gauche et fais glisser pour changer l’ordre. Touche « Transition » entre deux morceaux pour noter comment vous enchaînez.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
+    ${entries.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Fais glisser ≡ pour changer l’ordre.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
     <div class="add-row add-two">
       <button class="btn primary" data-act="pick-songs">${ICON.plus}Ajouter des morceaux</button>
       <button class="btn" data-act="new-item">${ICON.mic}Présentation, pause…</button>
@@ -1016,7 +1020,7 @@ function viewContacts() {
       <button class="btn primary small" data-act="new-contact">${ICON.plus}Ajouter un contact</button>
     </div>
     ${planSeg()}`;
-  if (!all.length) return head + emptyCard('Le carnet est vide', 'Salles, orgas, ingés son, studios : garde leurs numéros ici, tout le groupe les retrouve.', 'new-contact', 'Ajouter un contact');
+  if (!all.length) return head + emptyCard('Le carnet est vide', 'Salles, orgas, ingés son, studios.', 'new-contact', 'Ajouter un contact');
   return head + CONTACT_KINDS.map(([k, label]) => {
     const list = all.filter((c) => (CONTACT_KINDS.some(([kk]) => kk === c.kind) ? c.kind : 'autre') === k);
     if (!list.length) return '';
@@ -1103,7 +1107,7 @@ function viewPlanning() {
           ${notes.length ? `<div class="ev-notes">${notes.map(([id, n]) => `<span><i style="background:${memberColor(id)}"></i>${esc(memberName(id))} : ${esc(n)}</span>`).join('')}</div>` : ''}</div>
         <button class="btn small${full ? ' primary' : ''}" data-act="plan-date" data-date="${iso}">Caler</button>
       </li>`;
-  }).join('')}</ul>` : '<p class="empty-note">Coche tes jours de dispo dans l’agenda. Dès que deux personnes ou plus sont dispo le même jour, la date apparaît ici.</p>';
+  }).join('')}</ul>` : '<p class="empty-note">Les jours où au moins deux personnes sont dispo s’affichent ici.</p>';
 
   const all = Object.values(D('events')).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')));
   const up = all.filter((e) => e.date >= today);
@@ -1112,7 +1116,7 @@ function viewPlanning() {
     <li class="ev${isPast ? ' past' : ''}" data-act="open-event" data-id="${esc(e.id)}" tabindex="0" role="button">
       ${dateBlock(e.date)}
       <div><div class="ev-title">${esc(evTitle(e))}${e.type === 'concert' ? '<span class="badge">Concert</span>' : ''}</div>
-        <div class="ev-sub">${esc(fmtWeekday.format(parseISO(e.date)))}${e.time ? ' à ' + fmtTime(e.time) : ''}${e.place ? ', ' + esc(e.place) : ''}</div></div>
+        <div class="ev-sub">${esc(fmtWeekday.format(parseISO(e.date)))}${e.time ? ' à ' + fmtTime(e.time) : ''}${e.place ? ', ' + esc(e.place) : ''}${D('gigs')[e.gigId] ? ` · ${esc(D('gigs')[e.gigId].name)}` : ''}</div></div>
       <div class="ev-count">${availOn(e.date).length}/${MEMBERS.length}<small>dispos</small></div>
     </li>`;
 
@@ -1127,8 +1131,9 @@ function viewPlanning() {
       <button data-act="cal-mode" data-v="view" aria-pressed="${app.calMode === 'view'}">Voir le détail</button>
     </div>
     <p class="lede">${app.calMode === 'fill'
-      ? (app.me ? 'Touche les jours où tu es dispo. Chaque couleur, c’est quelqu’un ; les jours où tout le monde peut passent en vert.' : 'Choisis ton profil pour remplir tes dispos.')
-      : 'Touche un jour pour voir qui est dispo et à quelle heure, sans rien changer.'}</p>
+      ? (app.me ? 'Touche tes jours de dispo.' : 'Choisis ton profil d’abord.')
+      : 'Touche un jour pour voir qui est dispo.'}</p>
+    <div class="plan-grid">
     <div class="cal">
       <div class="cal-head">
         <button class="cal-nav" data-act="cal-nav" data-v="-1" aria-label="Mois précédent" ${canPrev ? '' : 'disabled'}>${ICON.prev}</button>
@@ -1142,13 +1147,16 @@ function viewPlanning() {
       </div>
       ${dayPanel(app.calSel, evByDate)}
     </div>
+    <div class="plan-side">
     <h3 class="block-title">Meilleures dates</h3>
     ${bestHtml}
     <h3 class="block-title">Dates calées</h3>
     ${up.length ? `<ul class="events">${up.map((e) => row(e)).join('')}</ul>` : '<p class="empty-note">Aucune date calée pour l’instant.</p>'}
     ${past.length ? `
       <button class="link-btn past-toggle" data-act="toggle-past" aria-expanded="${app.showPast}">${app.showPast ? 'Masquer' : 'Voir'} les dates passées (${past.length})</button>
-      ${app.showPast ? `<ul class="events">${past.map((e) => row(e, true)).join('')}</ul>` : ''}` : ''}`;
+      ${app.showPast ? `<ul class="events">${past.map((e) => row(e, true)).join('')}</ul>` : ''}` : ''}
+    </div>
+    </div>`;
 }
 
 /* ----- Matos ----- */
@@ -1196,22 +1204,12 @@ function plotItems() {
     const [dx, dy] = POS_XY[pos[x.m.id]];
     items.push({ id, kind: 'member', x: numOr(sv.x, dx), y: numOr(sv.y, dy), s: numOr(sv.s, 1), setup: x, name: x.m.name });
   });
-  const chosen = gigGear();
-  chosen.forEach((x, k) => {
+  // Le matos n'arrive sur scène que quand on l'y fait glisser depuis la liste.
+  gigGear().forEach((x) => {
     const id = 'g_' + x.id;
-    const sv = saved[id] || {};
-    if (sv.hidden) return;
-    // Par défaut : les pédales et micros devant le musicien, le reste (amplis, batterie…) derrière lui.
-    const owner = items.find((it) => it.id === 'm_' + x.owner);
-    const front = ['effets', 'micros', 'inears'].includes(x.cat);
-    const mates = chosen.filter((y) => y.owner === x.owner && ['effets', 'micros', 'inears'].includes(y.cat) === front);
-    const j = mates.indexOf(x);
-    const it = { id, kind: 'gear', s: numOr(sv.s, 1), gear: x, name: x.name };
-    const [hw, hh] = plotHalf(it);
-    const d = owner
-      ? clampPlot('gear', owner.x + (j - (mates.length - 1) / 2) * 62, owner.y + (front ? 40 : -50), hw, hh)
-      : clampPlot('gear', STAGE_R.x + 40 + (k % 5) * 58, STAGE_R.y + 20, hw, hh);
-    items.push({ ...it, x: numOr(sv.x, d.x), y: numOr(sv.y, d.y) });
+    const sv = saved[id];
+    if (!sv || sv.hidden || sv.x == null) return;
+    items.push({ id, kind: 'gear', x: Number(sv.x), y: Number(sv.y), s: numOr(sv.s, 1), gear: x, name: x.name });
   });
   const labels = PLOT_LABELS.map(([id, text, x, y]) => ({ id, text, x, y }));
   Object.keys(saved).filter((id) => id.startsWith('l_') && !PLOT_LABELS.some(([d]) => d === id)).forEach((id) => labels.push({ id, text: '', x: 180, y: 236 }));
@@ -1263,34 +1261,41 @@ function techPositions() {
 function stagePlotSvg(print, edit) {
   const sel = edit ? app.plotSel : null;
   const body = plotItems().map((it) => {
-    const k = it.s;
     let inner = '', box;
     if (it.kind === 'member') {
       const x = it.setup;
       const what = [x.drums && 'Batterie', x.bass && 'Basse', x.guitar && 'Guitare', x.keys && 'Clavier', (x.lead || x.backing) && (x.lead ? 'Chant' : 'Chœurs')].filter(Boolean).join(', ') || x.role;
-      box = [-30 * k, -30 * k, 60 * k, 62 * k];
+      box = [-30, -30, 60, 62];
       inner = `
-        ${x.drums ? `<rect x="${-40 * k}" y="${-30 * k}" width="${80 * k}" height="${48 * k}" rx="${6 * k}" class="sp-kit"/>` : ''}
-        ${x.lead || x.backing ? `<line x1="${15 * k}" y1="${-4 * k}" x2="${22 * k}" y2="${-11 * k}" class="sp-mic" style="stroke-width:${1.6 * k}"/><circle cx="${23.5 * k}" cy="${-12.5 * k}" r="${3 * k}" class="sp-mic-dot"/>` : ''}
-        <circle r="${12 * k}" fill="${x.m.color}"/>
-        <text y="${4.2 * k}" class="sp-ini" style="font-size:${12 * k}px">${esc(x.m.name[0])}</text>
-        <text y="${-17 * k}" class="sp-name" style="font-size:${10 * k}px">${esc(x.m.name)}</text>
-        ${what ? `<text y="${24 * k}" class="sp-what" style="font-size:${8 * k}px">${esc(what.slice(0, 26))}</text>` : ''}`;
+        ${x.drums ? '<rect x="-40" y="-30" width="80" height="48" rx="6" class="sp-kit"/>' : ''}
+        ${x.lead || x.backing ? '<line x1="15" y1="-4" x2="22" y2="-11" class="sp-mic"/><circle cx="23.5" cy="-12.5" r="3" class="sp-mic-dot"/>' : ''}
+        <circle r="12" fill="${x.m.color}"/>
+        <text y="4.2" class="sp-ini">${esc(x.m.name[0])}</text>
+        <text y="-17" class="sp-name">${esc(x.m.name)}</text>
+        ${what ? `<text y="24" class="sp-what">${esc(what.slice(0, 26))}</text>` : ''}`;
     } else if (it.kind === 'gear') {
       const label = it.gear.name.length > 20 ? it.gear.name.slice(0, 19) + '…' : it.gear.name;
-      const w = Math.max(40, label.length * 4.3 + 18) * k, h = 20 * k;
+      const w = Math.max(40, label.length * 4.3 + 18), h = 20;
       box = [-w / 2, -h / 2, w, h];
-      inner = `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="${4 * k}" class="sp-gear" style="stroke-width:${k}"/>
-        <circle cx="${-w / 2 + 7 * k}" cy="0" r="${2.8 * k}" fill="${memberColor(it.gear.owner)}"/>
-        <text x="${4 * k}" y="${2.6 * k}" class="sp-gtx" style="font-size:${7.2 * k}px">${esc(label)}</text>`;
+      inner = `<rect x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="4" class="sp-gear"/>
+        <circle cx="${-w / 2 + 7}" cy="0" r="2.8" fill="${memberColor(it.gear.owner)}"/>
+        <text x="4" y="2.6" class="sp-gtx">${esc(label)}</text>`;
     } else {
-      const w = (it.text.length * 6.2 + 8) * k, h = 16 * k;
-      box = [-w / 2, -h / 2 - 1 * k, w, h];
-      inner = `<text y="${3.6 * k}" class="sp-label" style="font-size:${10 * k}px">${esc(it.text)}</text>`;
+      const w = it.text.length * 6.2 + 8, h = 16;
+      box = [-w / 2, -h / 2 - 1, w, h];
+      inner = `<text y="3.6" class="sp-label">${esc(it.text)}</text>`;
     }
+    const k = it.s;
+    const isSel = sel === it.id;
     const hit = edit ? `<rect class="sp-hit" x="${box[0] - 6}" y="${box[1] - 6}" width="${box[2] + 12}" height="${box[3] + 12}" rx="6"/>` : '';
-    const ring = sel === it.id ? `<rect class="sp-sel" x="${box[0] - 4}" y="${box[1] - 4}" width="${box[2] + 8}" height="${box[3] + 8}" rx="6"/>` : '';
-    return `<g class="pi ${it.kind}${sel === it.id ? ' sel' : ''}"${edit ? ` data-plot-id="${it.id}"` : ''} transform="translate(${r1(it.x)} ${r1(it.y)})">${hit}${ring}${inner}</g>`;
+    const ring = isSel ? `<rect class="sp-sel" x="${box[0] - 4}" y="${box[1] - 4}" width="${box[2] + 8}" height="${box[3] + 8}" rx="6"/>` : '';
+    // Poignées : agrandir/réduire (coin bas droit), retirer (coin haut droit), renommer (coin haut gauche).
+    const corner = (cx, cy) => `transform="translate(${r1(cx * k)} ${r1(cy * k)})" data-cx="${cx}" data-cy="${cy}"`;
+    const handles = isSel ? `
+      <g class="ph ph-size" data-plot-handle="resize" ${corner(box[0] + box[2] + 4, box[1] + box[3] + 4)}><circle r="9"/><path d="M-3.5 3.5L3.5 -3.5M0.5 -3.5H3.5V-0.5M-3.5 0.5V3.5H-0.5"/></g>
+      ${it.kind !== 'member' ? `<g class="ph ph-del" data-plot-handle="act" data-act="plot-hide" ${corner(box[0] + box[2] + 4, box[1] - 4)}><circle r="9"/><path d="M-3 -3L3 3M3 -3L-3 3"/></g>` : ''}
+      ${it.kind === 'label' ? `<g class="ph ph-edit" data-plot-handle="act" data-act="plot-rename" ${corner(box[0] - 4, box[1] - 4)}><circle r="9"/><path d="M-3.5 3.5h2l5-5-2-2-5 5z"/></g>` : ''}` : '';
+    return `<g class="pi ${it.kind}${isSel ? ' sel' : ''}"${edit ? ` data-plot-id="${it.id}"` : ''} transform="translate(${r1(it.x)} ${r1(it.y)})"><g class="pi-body" transform="scale(${k})">${hit}${ring}${inner}</g>${handles}</g>`;
   }).join('');
   return `<svg class="plot${print ? ' print' : ''}${edit ? ' edit' : ''}" viewBox="0 0 ${PLOT_W} ${PLOT_H}" role="img" aria-label="Plan de scène">
     <rect x="${STAGE_R.x}" y="${STAGE_R.y}" width="${STAGE_R.w}" height="${STAGE_R.h}" rx="10" class="sp-stage"/>
@@ -1322,32 +1327,28 @@ function backline() {
   return Object.values(D('gear')).filter((x) => BACKLINE_CATS.includes(x.cat)).sort((a, b) => BACKLINE_CATS.indexOf(a.cat) - BACKLINE_CATS.indexOf(b.cat) || a.name.localeCompare(b.name, 'fr'));
 }
 function plotToolbar() {
-  const it = app.plotSel && plotItems().find((x) => x.id === app.plotSel);
-  const hidden = Object.entries((D('tech').plot) || {}).filter(([id, v]) => v && v.hidden && (id.startsWith('g_') || PLOT_LABELS.some(([d]) => d === id))).length;
+  const placed = new Set(plotItems().map((it) => it.id));
+  const tray = gigGear().filter((x) => !placed.has('g_' + x.id));
+  const g = currentGig();
   return `
-    ${it ? `
-    <div class="plot-tools">
-      <b>${esc(it.name)}</b>
-      <span class="st-group">
-        <button class="btn small" data-act="plot-size" data-v="-1" aria-label="Plus petit">A−</button>
-        <button class="btn small" data-act="plot-size" data-v="1" aria-label="Plus grand">A+</button>
-      </span>
-      ${it.kind === 'label' ? '<button class="btn small" data-act="plot-rename">Renommer</button>' : ''}
-      ${it.kind !== 'member' ? '<button class="btn small ghost" data-act="plot-hide">Retirer du plan</button>' : ''}
-      <button class="link-btn" data-act="plot-unsel">OK</button>
-    </div>` : '<p class="hint">Fais glisser les musiciens, le matos et les repères où tu veux. Touche un élément pour l’agrandir, le réduire ou le retirer.</p>'}
-    <div class="plot-actions">
-      <button class="btn small" data-act="plot-label">${ICON.plus}Ajouter un repère</button>
-      ${hidden ? `<button class="btn small ghost" data-act="plot-unhide">Remettre les éléments retirés (${hidden})</button>` : ''}
-      <button class="link-btn" data-act="plot-reset">Tout remettre en place</button>
-    </div>`;
+    <aside class="tray">
+      <div class="tray-head"><b>Matos du concert</b>${g ? `<span>${esc(g.name)}</span>` : ''}</div>
+      ${gigChips()}
+      ${!g ? '<p class="empty-note">Crée d’abord un concert.</p>'
+        : !gigGear().length ? '<p class="empty-note">Rien de coché dans « Pour un concert ».</p>'
+        : tray.length ? `<div class="tray-list">${tray.map((x) => `<button class="tray-item" data-tray-id="${esc(x.id)}" title="Fais glisser sur la scène"><i style="background:${memberColor(x.owner)}"></i><span>${esc(x.name)}</span></button>`).join('')}</div>
+          <p class="hint">Glisse sur la scène.</p>`
+        : '<p class="empty-note">Tout est sur scène.</p>'}
+      <button class="btn small" data-act="plot-label">${ICON.plus}Repère</button>
+      <button class="link-btn" data-act="plot-reset">Tout remettre à zéro</button>
+    </aside>`;
 }
 function sheetPlotLabel(s) {
   const cur = s.id ? plotItems().find((x) => x.id === s.id) : null;
   if (s.id && !cur) return null;
   const v = draft('pl.text');
   return `
-    ${sheetHead(cur ? 'Renommer le repère' : 'Ajouter un repère', cur ? '' : 'Un élément autour ou sur la scène : il se déplace comme les autres.')}
+    ${sheetHead(cur ? 'Renommer le repère' : 'Ajouter un repère')}
     <div class="form">
       <div class="chips">${LABEL_PRESETS.map((t) => `<button class="chip" data-act="pl-preset" data-v="${esc(t)}" aria-pressed="${v === t}">${esc(t)}</button>`).join('')}</div>
       <div class="field"><label for="pl-text">Texte</label><input id="pl-text" class="input" data-draft="pl.text" data-enter="pl-save" value="${esc(v)}" maxlength="40" placeholder="ex. Table de mixage"></div>
@@ -1356,30 +1357,74 @@ function sheetPlotLabel(s) {
 }
 function viewTech() {
   const tech = D('tech');
-  const inputs = Array.isArray(tech.inputs) ? tech.inputs : [];
-  const roles = bandSetup().filter((x) => x.role).length;
+  // Ancienne liste d'entrées générée d'après les rôles : on repart de zéro une fois.
+  if (tech.inputsV !== 2 && app.mode !== 'boot' && !app.techMig) {
+    app.techMig = true;
+    setTimeout(() => commit([{ op: 'set', path: ['tech', 'inputs'], value: [] }, { op: 'set', path: ['tech', 'inputsV'], value: 2 }]), 0);
+  }
+  const inputs = tech.inputsV === 2 && Array.isArray(tech.inputs) ? tech.inputs : [];
   const chosen = gigGear();
   const bl = chosen.length ? chosen : backline();
+  const sugg = inputSuggestions();
   return `
-    <p class="lede">La fiche à envoyer à l’orga ou à la salle : plan de scène, entrées pour la table de mixage et matos apporté. Tout se remplit à partir des instruments de chacun (profil) et de l’inventaire.</p>
     <h3 class="block-title">Plan de scène</h3>
-    ${currentGig() ? `<div class="plot-gig"><span>Le matos du plan est celui coché pour <b>${esc(currentGig().name)}</b> dans « Pour un concert ».</span>${gigChips()}</div>` : '<p class="hint">Crée un concert et coche son matos dans « Pour un concert » pour le placer sur le plan.</p>'}
-    <div class="plot-wrap">${stagePlotSvg(false, true)}</div>
-    ${plotToolbar()}
-    ${roles < MEMBERS.length ? `<p class="hint">Pense à renseigner l’instrument de chacun dans son profil (bouton en haut à droite) : la liste des entrées en dépend.</p>` : ''}
-    <h3 class="block-title">Liste des entrées<span class="bt-right"><button class="link-btn" data-act="tech-generate">${inputs.length ? 'Refaire depuis les rôles' : 'Remplir depuis les rôles'}</button></span></h3>
+    <div class="tech-grid">
+      ${plotToolbar()}
+      <div class="plot-wrap">${stagePlotSvg(false, true)}</div>
+    </div>
+    <h3 class="block-title">Liste des entrées<span class="count">${inputs.length || ''}</span></h3>
     ${inputs.length ? `<ol class="inputs">${inputs.map((r, i) => `
       <li class="in-row" data-act="edit-input" data-i="${i}" role="button" tabindex="0">
         <span class="in-n">${i + 1}</span>
         <div class="gr-main"><span class="gr-name">${esc(r.label)}</span><span class="gr-details">${esc([r.mic, r.stand && r.stand !== 'Aucun' ? r.stand.toLowerCase() : '', r.who ? memberName(r.who) : ''].filter(Boolean).join(' · '))}</span></div>
-      </li>`).join('')}</ol>` : '<p class="empty-note">Aucune entrée. Touche « Remplir depuis les rôles » ou ajoute-les une par une.</p>'}
+      </li>`).join('')}</ol>` : ''}
+    ${sugg.length ? `<div class="sugg"><span>D’après le matos :</span>${sugg.map((r, i) => `<button class="chip" data-act="input-sug" data-i="${i}">${ICON.plus}${esc(r.label)}</button>`).join('')}${sugg.length > 1 ? '<button class="link-btn" data-act="input-sug-all">Tout ajouter</button>' : ''}</div>` : ''}
     <div class="add-row"><button class="btn" data-act="new-input">${ICON.plus}Ajouter une entrée</button></div>
-    <h3 class="block-title">Matos apporté par le groupe<span class="count">${bl.length || ''}</span></h3>
-    ${bl.length ? `<ul class="bl-list">${bl.map((x) => `<li><span>${esc(x.name)}${qtyTag(x)}</span><span class="owner">${esc(memberName(x.owner))}</span></li>`).join('')}</ul>` : '<p class="empty-note">Coche le matos du concert dans « Pour un concert » : il apparaîtra ici et sur le plan.</p>'}
+    <h3 class="block-title">Matos apporté<span class="count">${bl.length || ''}</span></h3>
+    ${bl.length ? `<ul class="bl-list">${bl.map((x) => `<li><span>${esc(x.name)}${qtyTag(x)}</span><span class="owner">${esc(memberName(x.owner))}</span></li>`).join('')}</ul>` : '<p class="empty-note">Coche le matos dans « Pour un concert ».</p>'}
     <h3 class="block-title">Infos pour l’orga</h3>
-    <textarea class="input" data-draft="tech.notes" placeholder="ex. 4 retours ou in-ears, 2 prises 220 V côté jardin, arrivée 18 h pour la balance">${esc(draft('tech.notes', tech.notes || ''))}</textarea>
-    <div class="chart-actions"><button class="btn" data-act="tech-notes-save">Enregistrer les infos</button></div>
+    <textarea class="input" data-draft="tech.notes" placeholder="ex. 4 retours, 2 prises 220 V, balance à 18 h">${esc(draft('tech.notes', tech.notes || ''))}</textarea>
+    <div class="chart-actions"><button class="btn" data-act="tech-notes-save">Enregistrer</button></div>
     <div class="add-row"><button class="btn primary block" data-act="tech-print">${ICON.print}Imprimer la fiche technique</button></div>`;
+}
+
+// Entrées proposées d'après le matos coché pour le concert (et les chanteurs sans micro coché).
+function inputSuggestions() {
+  const gear = gigGear();
+  const out = [];
+  const add = (label, mic, stand, who) => out.push({ label, mic, stand, who });
+  const modeler = (n) => /helix|quad ?cortex|kemper|pod ?go|headrush|ampero|fractal|axe-?fx|gt-?1000|tonex|cortex/i.test(n);
+  const bassAmp = (n) => /bass|basse|ampeg|markbass|darkglass|hartke|eden|aguilar|gallien|trace elliot/i.test(n);
+  const eDrum = (n) => /électro|electro|e-?drum|td-?\d|v-?drum|alesis|dtx|nitro|roland|électronique/i.test(n);
+  const name = (id) => memberName(id);
+  gear.forEach((x) => {
+    const who = x.owner, nm = x.name;
+    if (x.cat === 'amplis') {
+      if (bassAmp(nm)) add(`Basse (${name(who)})`, 'DI de l’ampli', 'Aucun', who);
+      else add(`Ampli guitare ${nm} (${name(who)})`, 'SM57', 'Petit pied', who);
+    } else if (x.cat === 'effets' && modeler(nm)) {
+      add(`${nm} G (${name(who)})`, 'DI', 'Aucun', who);
+      add(`${nm} D (${name(who)})`, 'DI', 'Aucun', who);
+    } else if (x.cat === 'basses' && !gear.some((y) => y.owner === who && y.cat === 'amplis' && bassAmp(y.name))) {
+      add(`Basse (${name(who)})`, 'DI', 'Aucun', who);
+    } else if (x.cat === 'guitares' && !gear.some((y) => y.owner === who && (y.cat === 'amplis' || (y.cat === 'effets' && modeler(y.name))))) {
+      add(`Guitare (${name(who)})`, 'DI', 'Aucun', who);
+    } else if (x.cat === 'claviers') {
+      add(`${nm} G (${name(who)})`, 'DI', 'Aucun', who);
+      add(`${nm} D (${name(who)})`, 'DI', 'Aucun', who);
+    } else if (x.cat === 'batterie') {
+      if (eDrum(nm)) { add(`${nm} G`, 'DI', 'Aucun', who); add(`${nm} D`, 'DI', 'Aucun', who); }
+      else { add('Grosse caisse', 'Beta 52 ou D112', 'Petit pied', who); add('Caisse claire', 'SM57', 'Petit pied', who); add('Overheads', 'Statiques', 'Grand pied perche', who); }
+    } else if (x.cat === 'micros') {
+      add(`Voix ${name(who)}`, nm, 'Grand pied perche', who);
+    }
+  });
+  bandSetup().filter((x) => (x.lead || x.backing) && !gear.some((y) => y.cat === 'micros' && y.owner === x.m.id))
+    .forEach((x) => add(`${x.lead ? 'Chant' : 'Chœurs'} (${x.m.name})`, 'SM58', 'Grand pied perche', x.m.id));
+  const tech = D('tech');
+  const have = new Set((tech.inputsV === 2 && Array.isArray(tech.inputs) ? tech.inputs : []).map((r) => (r.label || '').toLowerCase()));
+  const seen = new Set();
+  return out.filter((r) => { const k = r.label.toLowerCase(); if (have.has(k) || seen.has(k)) return false; seen.add(k); return true; });
 }
 function sheetInput(s) {
   const inputs = Array.isArray(D('tech').inputs) ? D('tech').inputs : [];
@@ -1434,7 +1479,7 @@ function viewMatos() {
         <button class="btn primary small" data-act="new-gear">${ICON.plus}Ajouter du matos</button>
       </div>${seg}`;
     if (!gear.length) {
-      return head + emptyCard('L’inventaire est vide', 'Ajoute tout le matos du groupe, pièce par pièce : guitares, amplis, pédales, micros, câbles, piles… avec à qui c’est.', 'new-gear', 'Ajouter du matos');
+      return head + emptyCard('L’inventaire est vide', 'Guitares, amplis, pédales, câbles… et à qui c’est.', 'new-gear', 'Ajouter du matos');
     }
     const owners = [['all', 'Tout le monde', gear.length], ...MEMBERS.map((m) => [m.id, m.name, gear.filter((x) => x.owner === m.id).length]), ['groupe', 'Le groupe', gear.filter((x) => x.owner === 'groupe').length]].filter(([id, , n]) => id === 'all' || n);
     const items = app.gearOwner === 'all' ? gear : gear.filter((x) => x.owner === app.gearOwner);
@@ -1456,7 +1501,7 @@ function viewMatos() {
 
   const head = `<div class="section-head"><h2>Matos</h2></div>${seg}`;
   const g = currentGig();
-  if (!g) return head + emptyCard('Pas encore de concert', 'Crée un concert (c’est la même chose qu’une setlist) pour préparer le matos à emmener.', 'new-gig', 'Créer un concert');
+  if (!g) return head + emptyCard('Pas encore de concert', 'Crée un concert pour préparer son matos.', 'new-gig', 'Créer un concert');
   const sel = g.gear || {};
   const gearMap = D('gear');
   const chosen = Object.keys(sel).filter((id) => gearMap[id]).map((id) => gearMap[id]);
@@ -1474,7 +1519,7 @@ function viewMatos() {
             </li>`).join('')}
           </ul>
         </section>`).join('')}
-      ${done ? '<button class="link-btn past-toggle" data-act="gig-uncheck-all">Tout décocher</button>' : ''}` : `<p class="empty-note">${gear.length ? 'Rien de sélectionné. Choisis dans l’inventaire ce qu’il faut emmener.' : 'Remplis d’abord l’inventaire, puis choisis ici ce qu’il faut emmener.'}</p>`}
+      ${done ? '<button class="link-btn past-toggle" data-act="gig-uncheck-all">Tout décocher</button>' : ''}` : `<p class="empty-note">${gear.length ? 'Rien de choisi.' : 'Remplis d’abord l’inventaire.'}</p>`}
     <div class="add-row"><button class="btn primary block" data-act="${gear.length ? 'pick-gear' : 'go-inventory'}">${gear.length ? 'Choisir le matos' : 'Aller à l’inventaire'}</button></div>`;
 }
 
@@ -1519,6 +1564,8 @@ function renderSheet() {
   const html = fn ? fn(s) : null;
   if (html === null) { hide(); return; }
   const wasHidden = wrap.hidden;
+  const page = s.type === 'song' && !s.edit;
+  if (wrap.classList.contains('as-page') !== page) { wrap.classList.toggle('as-page', page); el.scrollTop = 0; }
   wrap.hidden = false;
   document.body.style.overflow = 'hidden';
   patch(el, html);
@@ -1552,85 +1599,89 @@ function sheetSong(s) {
   const link = safeUrl(song.link) || 'https://music.youtube.com/search?q=' + encodeURIComponent(song.artist + ' ' + song.title);
   const members = D('members');
   const inGigs = gigsList().filter((g) => (g.songs || []).includes(song.id));
+  const editing = app.cpEdit && app.cpEdit.id === song.id;
   ensureTone(song);
   const tone = toneOf(song);
   return `
     <div class="song-hero" style="--hero:${tone};--hero-ink:${inkFor(tone)}">
-      <div class="hero-top">${coverTile(song, 'lg')}${closeBtn()}</div>
-      <div class="hero-titles">
-        ${inGigs.length ? `<div class="sh-num">Dans ${inGigs.length > 1 ? 'les setlists' : 'la setlist'} ${esc(inGigs.map((g) => g.name).join(', '))}</div>` : ''}
-        <h2 class="sh-title">${esc(song.title)}</h2>
-        <div class="sh-sub">${esc(song.artist)}${song.duration ? `, ${fmtDur(song.duration)}` : ''}</div>
-      </div>
-      <div class="row-actions">
-        <a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener">${ICON.listen}Écouter</a>
-        <button class="btn" data-act="song-edit">Modifier</button>
-      </div>
-    </div>
-
-    <div class="tempo-box">
-      <div class="tempo-row">
-        <div class="tempo-read"><span class="big${song.bpm ? '' : ' empty'}">${song.bpm || '—'}</span><span class="unit">BPM</span></div>
-        <div class="tonabox">
-          <span class="keyl">Tona jouée</span>
-          <div class="tona-ctl" role="group" aria-label="Tonalité jouée par rapport à l’originale">
-            <button data-act="shift" data-v="-1" aria-label="Baisser d’un demi-ton">−</button>
-            <span class="tona-v">${shiftLabel(song)}</span>
-            <button data-act="shift" data-v="1" aria-label="Monter d’un demi-ton">+</button>
-          </div>
-          <span class="keyl">${Number(song.shift) ? `demi-ton${Math.abs(song.shift) > 1 ? 's' : ''} / l’originale` : 'comme l’original'}</span>
+      <div class="hero-in">
+        <div class="hero-top">${coverTile(song, 'lg')}${closeBtn()}</div>
+        <div class="hero-titles">
+          ${inGigs.length ? `<div class="sh-num">${esc(inGigs.map((g) => g.name).join(', '))}</div>` : ''}
+          <h2 class="sh-title">${esc(song.title)}</h2>
+          <div class="sh-sub">${esc(song.artist)}${song.duration ? ` · ${fmtDur(song.duration)}` : ''}</div>
+        </div>
+        <div class="row-actions">
+          <a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener">${ICON.listen}Écouter</a>
+          <button class="btn" data-act="cp-edit-top" aria-pressed="${!!editing}">${ICON.edit}${editing ? 'Terminé' : 'Accords'}</button>
+          <button class="btn" data-act="song-edit">Modifier</button>
         </div>
       </div>
-      <div class="tune-row">
-        <div><b>${fmtDur(song.duration) || '—'}</b><small>Durée</small></div>
-        <div><b>${esc(tuningOf(song) || 'Standard')}</b><small>Accordage</small></div>
-        <div><b>${song.capo > 0 ? 'Case ' + song.capo : 'Sans'}</b><small>Capo</small></div>
+    </div>
+
+    <div class="song-body">
+      <div class="sb-tempo">
+        <div class="tempo-box">
+          <div class="tempo-row">
+            <div class="tempo-read"><span class="big${song.bpm ? '' : ' empty'}">${song.bpm || '—'}</span><span class="unit">BPM</span></div>
+            <div class="tonabox">
+              <span class="keyl">Tona jouée</span>
+              <div class="tona-ctl" role="group" aria-label="Tonalité jouée par rapport à l’originale">
+                <button data-act="shift" data-v="-1" aria-label="Baisser d’un demi-ton">−</button>
+                <span class="tona-v">${shiftLabel(song)}</span>
+                <button data-act="shift" data-v="1" aria-label="Monter d’un demi-ton">+</button>
+              </div>
+            </div>
+          </div>
+          <div class="tune-row">
+            <div><b>${fmtDur(song.duration) || '—'}</b><small>Durée</small></div>
+            <div><b>${esc(tuningOf(song) || 'Standard')}</b><small>Accordage</small></div>
+            <div><b>${song.capo > 0 ? 'Case ' + song.capo : 'Sans'}</b><small>Capo</small></div>
+          </div>
+          ${song.bpm
+            ? `<button class="btn ${playing ? 'playing' : 'primary'} block" data-act="metro-toggle">${playing ? ICON.stop + 'Arrêter le click' : ICON.play + 'Lancer le click'}</button>`
+            : '<p class="empty-note" style="margin:0">Pas de tempo : ajoute-le dans « Modifier ».</p>'}
+        </div>
       </div>
-      ${song.bpm
-        ? `<button class="btn ${playing ? 'playing' : 'primary'} block" data-act="metro-toggle">${playing ? ICON.stop + 'Arrêter le click' : ICON.play + 'Lancer le click'}</button>`
-        : '<p class="empty-note" style="margin:0">Pas de tempo pour ce morceau. Ajoute-le dans « Modifier » pour avoir le click.</p>'}
-    </div>
 
-    <h3 class="block-title">Accords et paroles</h3>
-    ${songSheetBlock(song)}
-    <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Voir la tablature sur Songsterr</a>
+      <div class="sb-chords" id="chordsSec">
+        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">${song.sheet ? 'Modifier' : 'Placer nos accords'}</button></span>`}</h3>
+        ${songSheetBlock(song)}
+        <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
+      </div>
 
-    <h3 class="block-title">Ton niveau${app.me ? '' : ' (choisis ton profil)'}</h3>
-    <div class="levels" role="group" aria-label="Ton niveau">
-      ${LEVELS.map((l) => `<button data-act="set-level" data-v="${l.v}" aria-pressed="${mine === l.v}" ${app.me ? '' : 'disabled'}><i class="lvl-sw-${l.v}"></i>${esc(l.label)}</button>`).join('')}
-    </div>
+      <div class="sb-rest">
+        <h3 class="block-title">Ton niveau${app.me ? '' : ' (choisis ton profil)'}</h3>
+        <div class="levels" role="group" aria-label="Ton niveau">
+          ${LEVELS.map((l) => `<button data-act="set-level" data-v="${l.v}" aria-pressed="${mine === l.v}" ${app.me ? '' : 'disabled'}><i class="lvl-sw-${l.v}"></i>${esc(l.label)}</button>`).join('')}
+        </div>
 
-    <h3 class="block-title">Le groupe<span class="bt-right">${app.partsEdit === song.id ? '' : `<button class="link-btn" data-act="parts-edit">${Object.values(song.parts || {}).some((t) => t) ? 'Modifier qui fait quoi' : 'Qui fait quoi ?'}</button>`}</span></h3>
-    <div class="band-levels">
-      ${MEMBERS.map((m) => {
-        const v = lv[m.id] || 0;
-        const role = (members[m.id] || {}).role;
-        const part = ((song.parts || {})[m.id] || '').trim();
-        return `<div class="bl">
-          <span class="bl-name">${esc(m.name)}${role ? `<small>${esc(role)}</small>` : ''}</span>
-          <span class="bl-label">${esc(levelLabel(v))}</span>
-          <div class="bl-bar"><span style="width:${v * 25}%;background:${LV_COLORS[v]}"></span></div>
-          ${app.partsEdit === song.id
-            ? `<input class="input bl-input" data-draft="parts.${m.id}" value="${esc(draft('parts.' + m.id, part))}" placeholder="ex. chœurs au refrain, solo final, lance le morceau" maxlength="140" aria-label="Rôle de ${esc(m.name)} sur ce morceau">`
-            : part ? `<span class="bl-part">${esc(part)}</span>` : ''}
-        </div>`;
-      }).join('')}
-    </div>
-    ${app.partsEdit === song.id ? '<div class="chart-actions"><button class="btn primary" data-act="parts-save">Enregistrer</button><button class="btn ghost" data-act="parts-cancel">Annuler</button></div>' : ''}
+        <h3 class="block-title">Le groupe</h3>
+        <div class="band-levels">
+          ${MEMBERS.map((m) => {
+            const v = lv[m.id] || 0;
+            const role = (members[m.id] || {}).role;
+            return `<div class="bl">
+              <span class="bl-name">${esc(m.name)}${role ? `<small>${esc(role)}</small>` : ''}</span>
+              <span class="bl-label">${esc(levelLabel(v))}</span>
+              <div class="bl-bar"><span style="width:${v * 25}%;background:${LV_COLORS[v]}"></span></div>
+            </div>`;
+          }).join('')}
+        </div>
 
-    <h3 class="block-title">Notes<span class="count">${notes.length || ''}</span></h3>
-    ${notes.length ? `<ul class="notes">${notes.map((n) => `
-      <li class="note">
-        <div class="note-meta"><span class="who">${esc(memberName(n.by))}</span><span>${esc(ago(n.ts))}</span>
-          <button class="del" data-act="note-del" data-id="${esc(n.id)}">Supprimer</button></div>
-        <p class="note-text">${esc(n.text)}</p>
-      </li>`).join('')}</ul>` : ''}
-    <div class="composer">
-      <textarea class="input" id="noteText" data-draft="note.${esc(song.id)}" placeholder="Ex. On rallonge le solo, Quentin lance le refrain final" aria-label="Nouvelle note">${esc(draft('note.' + song.id))}</textarea>
-      <div><button class="btn" data-act="note-add">Ajouter la note</button></div>
-    </div>
-
-    `;
+        <h3 class="block-title">Notes<span class="count">${notes.length || ''}</span></h3>
+        ${notes.length ? `<ul class="notes">${notes.map((n) => `
+          <li class="note">
+            <div class="note-meta"><span class="who">${esc(memberName(n.by))}</span><span>${esc(ago(n.ts))}</span>
+              <button class="del" data-act="note-del" data-id="${esc(n.id)}">Supprimer</button></div>
+            <p class="note-text">${esc(n.text)}</p>
+          </li>`).join('')}</ul>` : ''}
+        <div class="composer">
+          <textarea class="input" id="noteText" data-draft="note.${esc(song.id)}" placeholder="Une note pour le groupe" aria-label="Nouvelle note">${esc(draft('note.' + song.id))}</textarea>
+          <div><button class="btn" data-act="note-add">Ajouter la note</button></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function sheetSongEdit(s) {
@@ -1643,11 +1694,11 @@ function sheetSongEdit(s) {
     const q = draft('song.search');
     let list = '';
     if (app.mode === 'local') {
-      list = '<p class="empty-note">Les suggestions et les pochettes arrivent quand l’appli est en ligne sur Netlify. Ici, remplis les champs à la main.</p>';
+      list = '<p class="empty-note">Suggestions disponibles en ligne.</p>';
     } else if (q.trim().length >= 2) {
       if (sg.q !== q.trim()) list = '<p class="empty-note">Recherche…</p>';
-      else if (sg.error) list = '<p class="empty-note">La recherche ne répond pas. Remplis les champs à la main.</p>';
-      else if (!sg.items.length) list = '<p class="empty-note">Rien trouvé. Remplis les champs à la main.</p>';
+      else if (sg.error) list = '<p class="empty-note">Recherche indisponible.</p>';
+      else if (!sg.items.length) list = '<p class="empty-note">Rien trouvé.</p>';
       else {
         const have = new Set(Object.values(D('songs')).map((x) => (x.title + '|' + x.artist).toLowerCase()));
         list = `<ul class="suggest">${sg.items.map((it, i) => `
@@ -1667,7 +1718,7 @@ function sheetSongEdit(s) {
       ${picked.title ? `<div class="picked">${coverTile(picked, 'sm')}<span>Tu peux corriger les infos ci-dessous avant d’ajouter.</span></div>` : ''}`;
   }
   return `
-    ${sheetHead(s.idea ? 'Proposer un morceau' : isNew ? 'Nouveau morceau' : 'Modifier le morceau', s.idea ? 'Il arrive dans les idées, les autres votent.' : '')}
+    ${sheetHead(s.idea ? 'Proposer un morceau' : isNew ? 'Nouveau morceau' : 'Modifier le morceau', '')}
     <div class="form">
       ${search}
       <div class="field"><label for="f-title">Titre</label><input id="f-title" class="input" data-draft="song.title" value="${esc(draft('song.title'))}" autocomplete="off"></div>
@@ -1748,6 +1799,14 @@ function sheetEvent(s) {
     <h3 class="block-title" style="margin-top:4px">Dispos ce jour-là</h3>
     <div class="dispo-row">${dispoChips(ev.date)}</div>
     ${app.me && !av.includes(app.me) && ev.date >= todayISO() ? `<div class="my-dispo"><button class="chip" data-act="toggle-day" data-date="${esc(ev.date)}">Je suis dispo ce jour-là</button></div>` : ''}
+    ${ev.type === 'concert' ? (() => {
+      const g = D('gigs')[ev.gigId];
+      if (!g) return `<h3 class="block-title">Setlist</h3><p class="empty-note" style="margin:0">Aucune pour l’instant. <button class="link-btn" data-act="event-edit">Associer une setlist</button></p>`;
+      const ent = gigEntries(g);
+      const total = ent.reduce((t, e) => t + entrySecs(e), 0);
+      return `<h3 class="block-title">Setlist</h3>
+        <button class="linked-gig" data-act="open-gig" data-id="${esc(g.id)}"><b>${esc(g.name)}</b><span>${plural(ent.filter((e) => e.song).length, 'morceau', 'morceaux')}${total ? ` · ${fmtMin(total)}` : ''}</span>${ICON.next}</button>`;
+    })() : ''}
     ${ev.notes ? `<h3 class="block-title">Infos</h3><p class="note-text" style="margin:0">${esc(ev.notes)}</p>` : ''}
     ${ev.date >= todayISO() ? (() => {
       const { ics, gcal } = calLinks(ev);
@@ -1757,7 +1816,7 @@ function sheetEvent(s) {
           ${online ? `<a class="btn primary" href="${esc(ics)}">${ICON.cal}Agenda du téléphone</a>` : `<button class="btn primary" data-act="ics-offline">${ICON.cal}Agenda du téléphone</button>`}
           <a class="btn" href="${esc(gcal)}" target="_blank" rel="noopener">Google Agenda</a>
         </div>
-        <p class="hint">Agenda du téléphone : avec un rappel la veille. Marche sur iPhone et Android.</p>`;
+        <p class="hint">Avec un rappel la veille.</p>`;
     })() : ''}
     <div class="form-actions" style="margin-top:22px"><button class="btn" data-act="event-edit">Modifier</button></div>`;
 }
@@ -1799,6 +1858,10 @@ function sheetEventEdit(s) {
       <div class="dispo-row" style="margin-top:-4px">${dispoChips(date)}</div>
       <div class="field"><label for="e-place">Lieu</label><input id="e-place" class="input" data-draft="ev.place" value="${esc(draft('ev.place', DEFAULT_PLACE))}"></div>
       <div class="field"><label for="e-title">Nom (facultatif)</label><input id="e-title" class="input" data-draft="ev.title" value="${esc(draft('ev.title'))}" placeholder="${type === 'concert' ? 'ex. Fête de la musique' : 'ex. Répète générale'}"></div>
+      ${type === 'concert' ? `<div class="field"><label for="e-gig">Setlist (facultatif)</label><select id="e-gig" class="input" data-draft="ev.gig">
+        <option value="">Pas encore</option>
+        ${gigsList().map((g) => `<option value="${esc(g.id)}" ${draft('ev.gig') === g.id ? 'selected' : ''}>${esc(g.name)} (${plural(gigEntries(g).filter((e) => e.song).length, 'morceau', 'morceaux')})</option>`).join('')}
+      </select></div>` : ''}
       <div class="field"><label for="e-notes">Infos</label><textarea id="e-notes" class="input" data-draft="ev.notes" placeholder="ex. Ramener les in-ears chargés, balance à 19 h">${esc(draft('ev.notes'))}</textarea></div>
       ${formActions(isNew, 'event-save', 'event-cancel', 'event-delete')}
     </div>`;
@@ -1809,7 +1872,7 @@ function sheetGig(s) {
   const isNew = !s.id;
   if (!isNew && !D('gigs')[s.id]) return null;
   return `
-    ${sheetHead(isNew ? 'Nouvelle setlist' : 'Modifier le concert', isNew ? 'Une setlist par concert, avec son matos à emmener.' : '')}
+    ${sheetHead(isNew ? 'Nouvelle setlist' : 'Modifier le concert', '')}
     <div class="form">
       <div class="field"><label for="g-name">Nom du concert</label><input id="g-name" class="input" data-draft="gig.name" data-enter="gig-save" value="${esc(draft('gig.name'))}" placeholder="ex. Fête de la musique"></div>
       <div class="grid-2">
@@ -1827,7 +1890,7 @@ function sheetItem(s) {
   if (!isNew && !(g.items || {})[s.id]) return null;
   const title = draft('item.title');
   return `
-    ${sheetHead(isNew ? 'Ajouter un intermède' : 'Modifier l’intermède', isNew ? 'Une présentation, une pause, des remerciements… il se range dans la setlist comme un morceau.' : '')}
+    ${sheetHead(isNew ? 'Ajouter un intermède' : 'Modifier l’intermède', '')}
     <div class="form">
       <div class="chips">${ITEM_PRESETS.map((t) => `<button class="chip" data-act="item-preset" data-v="${esc(t)}" aria-pressed="${title === t}">${esc(t)}</button>`).join('')}</div>
       <div class="field"><label for="i-title">Intitulé</label><input id="i-title" class="input" data-draft="item.title" value="${esc(title)}" placeholder="ex. Présentation du groupe" maxlength="80"></div>
@@ -1929,10 +1992,10 @@ function sheetProfile() {
     <div class="seg theme-seg" role="group" aria-label="Apparence">
       ${[['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Nuit']].map(([v, l]) => `<button data-act="theme" data-v="${v}" aria-pressed="${app.theme === v}">${l}</button>`).join('')}
     </div>
-    <p class="hint">Auto suit le réglage de ton téléphone. Réglage propre à cet appareil.</p>
+    
     ${app.mode === 'local' ? `
       <h3 class="block-title">${PREVIEW ? 'Aperçu' : 'Mode local'}</h3>
-      <p class="empty-note" style="margin:0 0 12px">Tout ce que tu changes ici reste sur cet appareil. Tu peux repartir du répertoire de départ quand tu veux.</p>
+      <p class="empty-note" style="margin:0 0 12px">Mode local : rien n’est partagé.</p>
       <button class="btn danger" data-act="reset-local">Repartir de zéro</button>` : ''}`;
 }
 
@@ -1941,16 +2004,20 @@ function cpApply() {
   const ed = app.cpEdit;
   const chunk = ed && ed.sel && ((ed.lines[ed.sel.l] || {}).chunks || [])[ed.sel.c];
   if (!chunk) return;
-  const shift = Number(D('songs')[ed.id].shift) || 0;
+  const song = D('songs')[ed.id];
+  const shift = Number(song.shift) || 0;
   chunk.ch = ed.root ? transposeChord(ed.root + ed.qual, -shift) : '';
-  renderSheet();
+  const text = cpSerialize(ed.lines).trim().slice(0, 18000);
+  if (text && text !== song.sheet) {
+    commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...(!song.sheet ? logOps(`a posé les accords de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id) : [])]);
+  } else renderSheet();
 }
 
 /* ----- Activité ----- */
 function sheetActivity() {
   const list = Object.values(D('log')).filter((e) => e && e.ts).sort((a, b) => b.ts - a.ts);
-  const head = sheetHead('Activité', 'Ce que le groupe a fait dernièrement');
-  if (!list.length) return head + '<p class="empty-note">Rien pour l’instant. Les ajouts de morceaux, les niveaux, les dates calées et les notes apparaîtront ici.</p>';
+  const head = sheetHead('Activité');
+  if (!list.length) return head + '<p class="empty-note">Rien pour l’instant.</p>';
   const today = todayISO();
   const groups = [];
   list.forEach((e) => {
@@ -2030,7 +2097,6 @@ function renderStage() {
         <div><b class="word${tuneChanged ? ' warn' : ''}">${esc(tune || 'Standard')}</b><small>Accordage${tuneChanged ? ', ça change' : ''}</small></div>
         ${s.capo > 0 ? `<div><b>${s.capo}</b><small>Capo</small></div>` : ''}
       </div>
-      ${parts.length ? `<ul class="st-parts">${parts.map(([m, t]) => `<li class="${m.id === app.me ? 'mine' : ''}"><i style="background:${m.color}"></i><b>${esc(m.name)}</b> ${esc(t)}</li>`).join('')}</ul>` : ''}
       <div class="st-tools">
         <button class="st-btn${playing ? ' on' : ''}" data-act="stage-click" ${s.bpm ? '' : 'disabled'}>${playing ? ICON.stop + 'Click' : ICON.play + (s.bpm ? 'Click' : 'Pas de tempo')}</button>
         ${playing ? '<div class="beats" aria-hidden="true"><i class="accent"></i><i></i><i></i><i></i></div>' : ''}
@@ -2349,17 +2415,13 @@ function setGig(id) {
 /* ================= Actions ================= */
 const actions = {
   'tab'(el) {
+    if (app.sheet) closeSheet();
     app.tab = el.dataset.tab;
     LS.set('hy.tab', app.tab);
     renderTabs(); renderView();
     window.scrollTo({ top: 0 });
   },
-  'rep-sort'(el) {
-    if (el.dataset.v === 'band' && app.repSort === 'band') app.repDir = -app.repDir;
-    else if (el.dataset.v === 'band') app.repDir = -1;
-    app.repSort = el.dataset.v;
-    renderView();
-  },
+  'rep-sort'(el) { app.repSort = el.value; LS.set('hy.repSort', app.repSort); renderView(); },
   'rep-tab'(el) { app.repTab = el.dataset.v === 'ideas' ? 'ideas' : 'songs'; LS.set('hy.repTab', app.repTab); renderView(); },
   'plan-tab'(el) { app.planTab = el.dataset.v === 'contacts' ? 'contacts' : 'agenda'; LS.set('hy.planTab', app.planTab); renderView(); },
   'add-idea'() {
@@ -2468,6 +2530,18 @@ const actions = {
   },
   'tech-print'() { printTech(); },
   'plot-unsel'() { app.plotSel = null; renderView(); },
+  'input-sug'(el) {
+    const r = inputSuggestions()[Number(el.dataset.i)];
+    if (!r) return;
+    const list = (D('tech').inputsV === 2 && Array.isArray(D('tech').inputs) ? D('tech').inputs : []).slice();
+    list.push({ id: newId('in'), ...r });
+    commit([{ op: 'set', path: ['tech', 'inputs'], value: list }, { op: 'set', path: ['tech', 'inputsV'], value: 2 }]);
+  },
+  'input-sug-all'() {
+    const list = (D('tech').inputsV === 2 && Array.isArray(D('tech').inputs) ? D('tech').inputs : []).slice();
+    inputSuggestions().forEach((r) => list.push({ id: newId('in'), ...r }));
+    commit([{ op: 'set', path: ['tech', 'inputs'], value: list }, { op: 'set', path: ['tech', 'inputsV'], value: 2 }]);
+  },
   'plot-size'(el) {
     const it = plotItems().find((x) => x.id === app.plotSel);
     if (!it) return;
@@ -2481,8 +2555,8 @@ const actions = {
     if (!it || it.kind === 'member') return;
     app.plotSel = null;
     const cur = ((D('tech').plot) || {})[it.id] || {};
-    const custom = it.kind === 'label' && !PLOT_LABELS.some(([d]) => d === it.id);
-    commitUndoable([custom ? { op: 'del', path: ['tech', 'plot', it.id] } : { op: 'set', path: ['tech', 'plot', it.id], value: { ...cur, hidden: true } }], `${it.name} retiré du plan`);
+    const isDefault = it.kind === 'label' && PLOT_LABELS.some(([d]) => d === it.id);
+    commitUndoable([isDefault ? { op: 'set', path: ['tech', 'plot', it.id], value: { ...cur, hidden: true } } : { op: 'del', path: ['tech', 'plot', it.id] }], it.kind === 'gear' ? `${it.name} remis dans la liste` : `${it.name} retiré`);
   },
   'plot-unhide'() {
     const plot = (D('tech').plot) || {};
@@ -2492,10 +2566,10 @@ const actions = {
     }));
   },
   async 'plot-reset'() {
-    if (!(await askConfirm('Remettre tout le monde et tout le matos à sa place par défaut ? Les repères ajoutés restent.', 'Remettre'))) return;
+    if (!(await askConfirm('Remettre le plan à zéro ? Le matos retourne dans la liste.', 'Remettre à zéro'))) return;
     const plot = (D('tech').plot) || {};
     const keep = {};
-    Object.entries(plot).forEach(([id, v]) => { if (id.startsWith('l_') && !PLOT_LABELS.some(([d]) => d === id) && !v.hidden) keep[id] = { text: v.text }; });
+    Object.entries(plot).forEach(([id, v]) => { if (id.startsWith('l_') && !PLOT_LABELS.some(([d]) => d === id) && !v.hidden) keep[id] = { text: v.text, x: v.x, y: v.y }; });
     app.plotSel = null;
     commitUndoable([{ op: 'set', path: ['tech', 'plot'], value: keep }, { op: 'set', path: ['tech', 'pos'], value: {} }], 'Plan remis en place');
   },
@@ -2645,6 +2719,11 @@ const actions = {
     renderSheet();
     setTimeout(() => { const t = $('#chartText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 40);
   },
+  'cp-edit-top'() {
+    if (app.cpEdit && app.cpEdit.id === app.sheet.id) { actions['cp-save'](); return; }
+    actions['cp-edit']();
+    setTimeout(() => { const sec = $('#chordsSec'); if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
+  },
   'cp-edit'() {
     const song = D('songs')[app.sheet.id];
     if (!song) return;
@@ -2702,9 +2781,8 @@ const actions = {
     const text = cpSerialize(lines).trim().slice(0, 18000);
     app.cpEdit = null;
     delete app.drafts['cp.raw'];
-    if (!text) { renderSheet(); return; }
+    if (!text || text === song.sheet) { renderSheet(); return; }
     commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...logOps(`a posé les accords de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id)]);
-    toast('Accords enregistrés pour tout le groupe');
   },
   'cp-reset'() {
     const ed = app.cpEdit;
@@ -2785,6 +2863,15 @@ const actions = {
     commitUndoable([{ op: 'del', path: ['gigs', g.id] }], 'Concert supprimé');
   },
   'pick-gig'(el) { setGig(el.dataset.id); renderView(); },
+  'open-gig'(el) {
+    if (!D('gigs')[el.dataset.id]) return;
+    setGig(el.dataset.id);
+    closeSheet();
+    app.tab = 'setlist';
+    LS.set('hy.tab', app.tab);
+    renderTabs(); renderView();
+    window.scrollTo({ top: 0 });
+  },
   'pick-songs'() { delete app.drafts['pick.q']; openSheet({ type: 'pick-songs' }); },
   'toggle-gig-song'(el) {
     const g = D('gigs')[app.gigId];
@@ -2933,7 +3020,7 @@ const actions = {
   'event-edit'() {
     const e = D('events')[app.sheet.id];
     clearDrafts('ev.');
-    Object.assign(app.drafts, { 'ev.type': e.type || 'repet', 'ev.title': e.title || '', 'ev.date': e.date, 'ev.time': e.time || '', 'ev.place': e.place || '', 'ev.notes': e.notes || '' });
+    Object.assign(app.drafts, { 'ev.type': e.type || 'repet', 'ev.title': e.title || '', 'ev.date': e.date, 'ev.time': e.time || '', 'ev.place': e.place || '', 'ev.notes': e.notes || '', 'ev.gig': e.gigId || '' });
     app.sheet.edit = true;
     renderSheet();
   },
@@ -2949,16 +3036,20 @@ const actions = {
       time: draft('ev.time', '20:00'),
       place: draft('ev.place', DEFAULT_PLACE).trim(),
       notes: draft('ev.notes').trim(),
+      gigId: draft('ev.type', 'repet') === 'concert' && D('gigs')[draft('ev.gig')] ? draft('ev.gig') : '',
     };
+    // La setlist prend la date du concert si elle n'en a pas.
+    const g = D('gigs')[fields.gigId];
+    const gigDate = g && !g.date ? [{ op: 'set', path: ['gigs', g.id, 'date'], value: date }] : [];
     if (app.sheet.id) {
       const id = app.sheet.id;
-      commit(Object.entries(fields).map(([k, v]) => ({ op: 'set', path: ['events', id, k], value: v })));
+      commit([...Object.entries(fields).map(([k, v]) => ({ op: 'set', path: ['events', id, k], value: v })), ...gigDate]);
       app.sheet.edit = false;
       renderSheet();
     } else {
       const id = newId('e');
       const when = fmtDay.format(parseISO(date)) + (fields.time ? ' à ' + fmtTime(fields.time) : '');
-      commit([{ op: 'set', path: ['events', id], value: { id, ...fields, by: app.me, ts: Date.now() } }, ...logOps(`a calé ${fields.type === 'concert' ? 'un concert' : 'une répète'} le ${when}`)]);
+      commit([{ op: 'set', path: ['events', id], value: { id, ...fields, by: app.me, ts: Date.now() } }, ...gigDate, ...logOps(`a calé ${fields.type === 'concert' ? 'un concert' : 'une répète'} le ${when}`)]);
       closeSheet();
       toast(fields.type === 'concert' ? 'Concert calé' : 'Répète calée');
     }
@@ -3316,9 +3407,42 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 
 // Plan de scène : on fait glisser les éléments (souris ou doigt).
 const pdrag = { g: null };
+const tdrag = { el: null };
+const rdrag = { g: null };
+function svgPoint(svg, cx, cy) {
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  const p = new DOMPoint(cx, cy).matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
 document.addEventListener('pointerdown', (e) => {
-  const g = e.target.closest && e.target.closest('.plot.edit [data-plot-id]');
-  if (!g) return;
+  const t = e.target.closest ? e.target : null;
+  if (!t) return;
+  // Glisser un élément de la liste vers la scène.
+  const tray = t.closest('[data-tray-id]');
+  if (tray) {
+    e.preventDefault();
+    Object.assign(tdrag, { el: tray, id: tray.dataset.trayId, sx: e.clientX, sy: e.clientY, moved: false, ghost: null });
+    return;
+  }
+  const handle = t.closest('.plot.edit [data-plot-handle]');
+  if (handle) {
+    if (handle.dataset.plotHandle !== 'resize') return; // retirer / renommer : géré par le clic
+    e.preventDefault();
+    const g = handle.closest('[data-plot-id]');
+    const it = plotItems().find((x) => x.id === g.dataset.plotId);
+    const c = g.getBoundingClientRect ? g.querySelector('.pi-body').getBoundingClientRect() : null;
+    if (!it || !c) return;
+    const cx = c.left + c.width / 2, cy = c.top + c.height / 2;
+    Object.assign(rdrag, { g, it, cx, cy, d0: Math.max(10, Math.hypot(e.clientX - cx, e.clientY - cy)), s0: it.s, s: it.s });
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+    return;
+  }
+  const g = t.closest('.plot.edit [data-plot-id]');
+  if (!g) {
+    if (t.closest('.plot.edit') && app.plotSel) { app.plotSel = null; renderView(); }
+    return;
+  }
   const it = plotItems().find((x) => x.id === g.dataset.plotId);
   const ctm = g.ownerSVGElement && g.ownerSVGElement.getScreenCTM();
   if (!it || !ctm) return;
@@ -3328,6 +3452,25 @@ document.addEventListener('pointerdown', (e) => {
   try { g.setPointerCapture(e.pointerId); } catch {}
 });
 document.addEventListener('pointermove', (e) => {
+  if (rdrag.g) {
+    const d = Math.hypot(e.clientX - rdrag.cx, e.clientY - rdrag.cy);
+    const sNew = Math.max(0.5, Math.min(3, rdrag.s0 * (d / rdrag.d0)));
+    rdrag.s = sNew;
+    rdrag.g.querySelector('.pi-body').setAttribute('transform', `scale(${r1(sNew * 100) / 100})`);
+    rdrag.g.querySelectorAll('.ph').forEach((h) => h.setAttribute('transform', `translate(${r1(h.dataset.cx * sNew)} ${r1(h.dataset.cy * sNew)})`));
+    return;
+  }
+  if (tdrag.el) {
+    if (!tdrag.moved && Math.hypot(e.clientX - tdrag.sx, e.clientY - tdrag.sy) < 6) return;
+    if (!tdrag.ghost) {
+      tdrag.moved = true;
+      tdrag.ghost = tdrag.el.cloneNode(true);
+      tdrag.ghost.classList.add('tray-ghost');
+      document.body.appendChild(tdrag.ghost);
+    }
+    tdrag.ghost.style.transform = `translate(${e.clientX - 20}px, ${e.clientY - 18}px)`;
+    return;
+  }
   if (!pdrag.g) return;
   const dx = e.clientX - pdrag.sx, dy = e.clientY - pdrag.sy;
   if (!pdrag.moved && Math.hypot(dx, dy) < 4) return;
@@ -3344,8 +3487,44 @@ function endPlotDrag() {
   if (moved) { app.plotSel = id; plotSave(id, { x: r1(x), y: r1(y) }); }
   else { app.plotSel = app.plotSel === id ? null : id; renderView(); }
 }
-document.addEventListener('pointerup', endPlotDrag);
-document.addEventListener('pointercancel', endPlotDrag);
+document.addEventListener('pointerup', (e) => {
+  if (rdrag.g) {
+    const { it, s: sNew } = rdrag;
+    rdrag.g = null;
+    const [hw, hh] = plotHalf({ ...it, s: sNew });
+    const p = clampPlot(it.kind, it.x, it.y, hw, hh);
+    plotSave(it.id, { s: Math.round(sNew * 100) / 100, x: r1(p.x), y: r1(p.y) });
+    return;
+  }
+  if (tdrag.el) {
+    const { id, moved, ghost } = tdrag;
+    tdrag.el = null;
+    if (ghost) ghost.remove();
+    const svg = document.querySelector('.plot.edit');
+    const x = (D('gear') || {})[id];
+    if (!svg || !x) return;
+    let pt;
+    if (moved) {
+      const r = svg.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+      pt = svgPoint(svg, e.clientX, e.clientY);
+    } else pt = { x: STAGE_R.x + STAGE_R.w / 2, y: STAGE_R.y + STAGE_R.h / 2 }; // simple tap : au centre de la scène
+    if (!pt) return;
+    const it = { kind: 'gear', s: 1, name: x.name };
+    const [hw, hh] = plotHalf(it);
+    const p = clampPlot('gear', pt.x, pt.y, hw, hh);
+    app.plotSel = 'g_' + id;
+    plotSave('g_' + id, { x: r1(p.x), y: r1(p.y), s: 1 });
+    return;
+  }
+  endPlotDrag();
+});
+document.addEventListener('pointercancel', () => {
+  if (tdrag.ghost) tdrag.ghost.remove();
+  tdrag.el = null;
+  rdrag.g = null;
+  endPlotDrag();
+});
 
 /* ================= Démarrage ================= */
 if (PREVIEW) $('#previewBanner').hidden = false;
