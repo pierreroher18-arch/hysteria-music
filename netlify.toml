@@ -1,4 +1,5 @@
 [build]
+  command = "mkdir -p public netlify/functions && cp index.html app.js style.css shared.mjs public/ && cp state.mjs search.mjs netlify/functions/"
   publish = "public"
 
 [functions]
