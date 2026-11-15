@@ -43,14 +43,7 @@ function inkFor(hex) {
 const tuningOf = (s) => (s && s.tuning && s.tuning !== 'Standard' ? s.tuning : '');
 const tuneBits = (s) => [tuningOf(s), s.capo > 0 ? `capo ${s.capo}` : ''].filter(Boolean);
 // Liens vers les accords, tablatures et paroles, pour chaque morceau (y compris ceux ajoutés plus tard).
-function extLinks(s) {
-  const q = encodeURIComponent(`${s.artist || ''} ${s.title || ''}`.trim());
-  return [
-    { label: 'Accords', site: 'Ultimate Guitar', url: `https://www.ultimate-guitar.com/search.php?search_type=title&value=${q}` },
-    { label: 'Tablatures', site: 'Songsterr', url: `https://www.songsterr.com/a/wa/bestMatchForQueryString?s=${encodeURIComponent(s.title || '')}&a=${encodeURIComponent(s.artist || '')}` },
-    { label: 'Paroles', site: 'Genius', url: `https://genius.com/search?q=${q}` },
-  ];
-}
+const songsterrUrl = (s) => `https://www.songsterr.com/a/wa/bestMatchForQueryString?s=${encodeURIComponent(s.title || '')}&a=${encodeURIComponent(s.artist || '')}`;
 
 // Paroles cherchées à la demande (LRCLIB, via /api/lyrics). Gardées en mémoire le temps de la session.
 const lyricsKey = (s) => `${s.title}|${s.artist}`;
@@ -81,6 +74,78 @@ function lyricsBody(s, cls = 'lyrics') {
   return `<pre class="${cls}">${esc(l.text)}</pre>`;
 }
 
+// Accords + paroles (version « Chords » la mieux notée d'Ultimate Guitar, via /api/chords).
+function loadSheet(s, retry) {
+  if (!s || app.mode === 'local') return;
+  const k = lyricsKey(s);
+  if (app.sheets[k] && !retry) return;
+  app.sheets[k] = { state: 'loading' };
+  fetch('/api/chords?' + new URLSearchParams({ title: s.title || '', artist: s.artist || '' }).toString(), { headers: headers() })
+    .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+    .then(({ ok, j }) => { app.sheets[k] = j && j.found && j.content ? { state: 'ok', ...j } : { state: ok ? 'none' : 'error' }; })
+    .catch(() => { app.sheets[k] = { state: 'error' }; })
+    .finally(() => { renderSheet(); renderStage(); });
+}
+const NOTE_V = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const SHARPS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const FLATS = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'];
+function shiftNote(root, acc, n, flat) {
+  const v = NOTE_V[root] + (acc === '#' || acc === '♯' ? 1 : acc === 'b' || acc === '♭' ? -1 : 0) + n;
+  return (flat ? FLATS : SHARPS)[((v % 12) + 12) % 12];
+}
+function transposeChord(ch, n) {
+  if (!n) return ch;
+  const flat = /^[A-G](b|♭)/.test(ch);
+  return ch.replace(/^([A-G])([#b♯♭]?)/, (_, r, a) => shiftNote(r, a, n, flat))
+    .replace(/\/([A-G])([#b♯♭]?)/, (_, r, a) => '/' + shiftNote(r, a, n, flat));
+}
+const SECTION_FR = [['pre-chorus', 'Pré-refrain'], ['pre chorus', 'Pré-refrain'], ['post-chorus', 'Post-refrain'], ['chorus', 'Refrain'], ['verse', 'Couplet'], ['bridge', 'Pont'], ['intro', 'Intro'], ['outro', 'Outro'], ['solo', 'Solo'], ['interlude', 'Interlude'], ['instrumental', 'Instrumental'], ['riff', 'Riff'], ['hook', 'Refrain'], ['ending', 'Fin'], ['coda', 'Coda'], ['break', 'Break']];
+function frSection(label) {
+  const low = label.toLowerCase();
+  const hit = SECTION_FR.find(([en]) => low.startsWith(en));
+  return hit ? hit[1] + label.slice(hit[0].length) : label;
+}
+function chordSheetHtml(sh, shift, cls) {
+  let cols = 0;
+  const body = sh.content.replace(/\[\/?tab\]/g, '').split('\n').map((line) => {
+    const sec = line.trim().match(/^\[([^\[\]]+)\]$/);
+    if (sec) return `<span class="cs-sec">${esc(frSection(sec[1]))}</span>`;
+    cols = Math.max(cols, line.replace(/\[\/?ch\]/g, '').length);
+    return esc(line).replace(/\[ch\](.*?)\[\/ch\]/g, (_, c) => `<b class="ch">${transposeChord(c, shift)}</b>`);
+  }).join('\n');
+  return `<pre class="${cls}" style="--cols:${Math.max(24, Math.min(cols, 64))}">${body}</pre>`;
+}
+// Bloc « Accords et paroles » de la fiche (et du mode scène). Sans grille trouvée, on montre les paroles seules.
+function chordBlock(s, stage) {
+  if (app.mode === 'local') return '<p class="empty-note">Les accords et les paroles s’affichent sur le site en ligne.</p>';
+  loadSheet(s);
+  const sh = app.sheets[lyricsKey(s)] || { state: 'loading' };
+  if (sh.state === 'loading') return '<p class="empty-note">Chargement des accords et des paroles…</p>';
+  if (sh.state !== 'ok') {
+    const why = sh.state === 'none'
+      ? 'Pas de grille d’accords trouvée pour ce morceau. Voici les paroles :'
+      : 'La grille d’accords n’a pas pu être chargée. <button class="link-btn" data-act="sheet-retry">Réessayer</button> En attendant, les paroles :';
+    return `<p class="empty-note">${why}</p>${lyricsBody(s, stage ? 'st-lyrics' : 'lyrics')}`;
+  }
+  const shift = Math.max(-11, Math.min(11, Number(s.shift) || 0));
+  const key = sh.key ? transposeChord(sh.key, shift) : '';
+  const bits = [sh.capo ? `Capo ${sh.capo}` : '', sh.tuning && !/^standard$/i.test(sh.tuning) ? `Accordage ${sh.tuning}` : '', key ? `Tonalité ${key}` : ''].filter(Boolean);
+  if (stage) {
+    return `${bits.length || shift ? `<div class="st-cs-meta">${esc(bits.join(' · '))}${shift ? `${bits.length ? ' · ' : ''}transposé de ${shift > 0 ? '+' : ''}${shift}` : ''}</div>` : ''}${chordSheetHtml(sh, shift, 'st-sheet')}`;
+  }
+  return `
+    <div class="cs-tools">
+      <span class="cs-shift" role="group" aria-label="Transposer">
+        <button data-act="shift" data-v="-1" aria-label="Descendre d’un demi-ton">−</button>
+        <span>${shift > 0 ? '+' : ''}${shift}</span>
+        <button data-act="shift" data-v="1" aria-label="Monter d’un demi-ton">+</button>
+      </span>
+      ${bits.map((b) => `<span class="cs-chip">${esc(b)}</span>`).join('')}
+    </div>
+    ${chordSheetHtml(sh, shift, 'chordsheet')}
+    <p class="hint">Version la mieux notée d’Ultimate Guitar${sh.rating ? ` (${String(sh.rating).replace('.', ',')}/5, ${sh.votes} votes)` : ''}. Le transpositeur vaut pour tout le groupe.</p>`;
+}
+
 const ICON = {
   close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   play: '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></svg>',
@@ -97,6 +162,14 @@ const ICON = {
   print: '<svg viewBox="0 0 24 24"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="8" rx="2"/><path d="M7 14h10v6H7z"/></svg>',
   cal: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
   out: '<svg viewBox="0 0 24 24"><path d="M8 16L16 8M9.5 8H16v6.5"/></svg>',
+  lock: '<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
+  mic: '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M7 11v9H4v-9zM7 11l4-7c1.5 0 2.5 1 2 3l-1 3h6a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 16.8 20H7"/></svg>',
+  down: '<svg viewBox="0 0 24 24"><path d="M7 13V4H4v9zM7 13l4 7c1.5 0 2.5-1 2-3l-1-3h6a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 16.8 4H7"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><path d="M6.5 3.5h3l1.5 4-2 1.5a11 11 0 0 0 6 6l1.5-2 4 1.5v3a2 2 0 0 1-2 2A16 16 0 0 1 4.5 5.5a2 2 0 0 1 2-2z"/></svg>',
+  mail: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/></svg>',
+  scroll: '<svg viewBox="0 0 24 24"><path d="M12 4v16M7 15l5 5 5-5"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg>',
 };
 const PREVIEW = !!window.HYSTERIA_PREVIEW;
 const TABS = ['repertoire', 'setlist', 'planning', 'matos'];
@@ -164,10 +237,13 @@ const app = {
   seen: LS.get('hy.seen', null),
   seenBefore: 0,
   chartEdit: null,
+  partsEdit: null,
+  repTab: LS.get('hy.repTab', 'songs'),
+  planTab: LS.get('hy.planTab', 'agenda'),
   stage: null,
   wake: null,
   lyrics: {},
-  showLyrics: LS.get('hy.showLyrics', false),
+  sheets: {},
 };
 if (!['auto', 'light', 'dark'].includes(app.theme)) app.theme = 'auto';
 if (app.seen == null) { app.seen = Date.now(); LS.set('hy.seen', app.seen); }
@@ -313,6 +389,17 @@ function nextEvent() {
     .sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')))[0] || null;
 }
 const evTitle = (ev) => ev.title || (ev.type === 'concert' ? 'Concert' : 'Répète');
+
+/* ----- Setlist : morceaux et intermèdes (présentation, pause…) ----- */
+const ITEM_PRESETS = ['Présentation du groupe', 'Pause', 'Remerciements', 'Annonce', 'Accordage'];
+const AVG_SONG = 240; // durée supposée d'un morceau dont on ne connaît pas la durée
+function gigEntries(g) {
+  const songs = D('songs');
+  const items = (g && g.items) || {};
+  return ((g && g.songs) || []).map((id) => (songs[id] ? { id, song: songs[id] } : items[id] ? { id, item: items[id] } : null)).filter(Boolean);
+}
+const entrySecs = (e) => (e.song ? e.song.duration || 0 : (Number(e.item.dur) || 0) * 60);
+const fmtMin = (sec) => `${Math.round(sec / 60)} min`;
 
 /* ----- Fil d'activité ----- */
 // Ajoute une ligne au fil. Si je refais la même chose dans les 10 minutes, on met à jour la ligne au lieu d'en créer une.
@@ -528,7 +615,57 @@ function pipsFor(s) {
   return MEMBERS.map((m) => `<span class="pip lv${lv[m.id] || 0}${m.id === app.me ? ' mine' : ''}" title="${esc(m.name)} : ${esc(levelLabel(lv[m.id] || 0))}">${esc(m.name[0])}</span>`).join('');
 }
 
+function repSeg() {
+  const n = Object.values(D('ideas')).filter((it) => ideaState(it) === 'open').length;
+  return `<div class="seg top-seg" role="group" aria-label="Vue">
+    <button data-act="rep-tab" data-v="songs" aria-pressed="${app.repTab !== 'ideas'}">Morceaux</button>
+    <button data-act="rep-tab" data-v="ideas" aria-pressed="${app.repTab === 'ideas'}">Idées${n ? ` <span class="chip-n">${n}</span>` : ''}</button>
+  </div>`;
+}
+const NEED = Math.floor(MEMBERS.length / 2) + 1; // majorité : 3 sur 4
+const voteCount = (it, v) => Object.values(it.votes || {}).filter((x) => x === v).length;
+const ideaState = (it) => (voteCount(it, -1) >= NEED ? 'no' : 'open');
+
+function viewIdeas() {
+  const all = Object.values(D('ideas'));
+  const list = all.sort((a, b) => (ideaState(a) === 'no') - (ideaState(b) === 'no') || voteCount(b, 1) - voteCount(a, 1) || (b.ts || 0) - (a.ts || 0));
+  const rows = list.map((it) => {
+    const mine = (it.votes || {})[app.me] || 0;
+    const no = ideaState(it) === 'no';
+    return `
+      <li class="idea${no ? ' rejected' : ''}">
+        ${coverTile(it)}
+        <div class="id-main">
+          <span class="title">${esc(it.title)}</span>
+          <span class="artist">${esc(it.artist)}${it.by ? ` · proposé par ${esc(memberName(it.by))}` : ''}</span>
+          ${it.note ? `<span class="id-note">${esc(it.note)}</span>` : ''}
+          <span class="id-voters">${MEMBERS.map((m) => { const v = (it.votes || {})[m.id] || 0; return `<i class="${v > 0 ? 'yes' : v < 0 ? 'no' : ''}" style="--mc:${m.color}" title="${esc(m.name)} : ${v > 0 ? 'pour' : v < 0 ? 'contre' : 'pas encore voté'}">${esc(m.name[0])}</i>`; }).join('')}
+            ${no ? '<em>Refusé à la majorité</em>' : `<em>${voteCount(it, 1)} sur ${NEED} pour passer</em>`}</span>
+        </div>
+        <div class="id-side">
+          <div class="id-votes">
+            <button class="vote up" data-act="idea-vote" data-id="${esc(it.id)}" data-v="1" aria-pressed="${mine === 1}" aria-label="Voter pour" ${app.me ? '' : 'disabled'}>${ICON.up}</button>
+            <button class="vote down" data-act="idea-vote" data-id="${esc(it.id)}" data-v="-1" aria-pressed="${mine === -1}" aria-label="Voter contre" ${app.me ? '' : 'disabled'}>${ICON.down}</button>
+          </div>
+          <div class="id-links">
+            <a href="${esc(ytMusic(it.artist + ' ' + it.title))}" target="_blank" rel="noopener">Écouter</a>
+            <button data-act="idea-del" data-id="${esc(it.id)}">Retirer</button>
+          </div>
+        </div>
+      </li>`;
+  }).join('');
+  return `
+    <div class="section-head">
+      <h2>Répertoire</h2>
+      <button class="btn primary small" data-act="add-idea">${ICON.plus}Proposer un morceau</button>
+    </div>
+    ${repSeg()}
+    <p class="lede">Propose un morceau, chacun vote. Dès que ${NEED} personnes sur ${MEMBERS.length} sont pour, il passe tout seul au répertoire.</p>
+    ${list.length ? `<ul class="ideas">${rows}</ul>` : emptyCard('Aucune idée pour l’instant', 'Un morceau que tu aimerais reprendre ? Propose-le, les autres votent.', 'add-idea', 'Proposer un morceau')}`;
+}
+
 function viewRepertoire() {
+  if (app.repTab === 'ideas') return viewIdeas();
   const all = songsList();
   let list = all.slice();
   const q = app.query.trim().toLowerCase();
@@ -564,6 +701,7 @@ function viewRepertoire() {
       <h2>Répertoire</h2>
       <button class="btn primary small" data-act="add-song">${ICON.plus}Ajouter un morceau</button>
     </div>
+    ${repSeg()}
     <div class="summary">
       <div class="pct">${pct}<small>%</small></div>
       <div class="sum-line"><strong>${ready}</strong> sur ${plural(n, 'morceau', 'morceaux')} prêts pour tout le monde</div>
@@ -617,39 +755,61 @@ function viewSetlist() {
   if (!g) {
     return head + emptyCard('Pas encore de setlist', 'Crée la setlist d’un concert, ajoute des morceaux du répertoire, puis range-les dans l’ordre en les faisant glisser.', 'new-gig', 'Créer une setlist');
   }
-  const songs = D('songs');
-  const ids = (g.songs || []).filter((id) => songs[id]);
+  const entries = gigEntries(g);
   const tr = g.transitions || {};
-  const rows = ids.map((id, i) => {
-    const s = songs[id];
-    const nextId = ids[i + 1];
+  let num = 0;
+  const rows = entries.map((e, i) => {
+    const next = entries[i + 1];
+    if (e.item) {
+      const it = e.item;
+      return `
+      <li class="sl-row sl-item" data-id="${esc(e.id)}">
+        <button class="grip" data-drag-handle aria-label="Déplacer ${esc(it.title)}">${ICON.grip}</button>
+        <span class="sl-num"></span>
+        <span class="it-ico" aria-hidden="true">${ICON.mic}</span>
+        <button class="sl-main" data-act="edit-item" data-id="${esc(e.id)}"><span class="title">${esc(it.title)}</span>${it.note ? `<span class="artist">${esc(it.note)}</span>` : ''}</button>
+        <span class="sl-meta"><span class="key">${it.dur ? esc(it.dur) + ' min' : ''}</span></span>
+        <button class="x" data-act="gig-remove-song" data-id="${esc(e.id)}" aria-label="Retirer ${esc(it.title)} de la setlist">${ICON.close}</button>
+      </li>`;
+    }
+    const s = e.song;
+    num++;
     let gap = '';
-    if (nextId) {
-      const t = tr[id + '__' + nextId];
+    if (next && next.song) {
+      const t = tr[e.id + '__' + next.id];
       gap = `<li class="sl-gap">${t
-        ? `<button class="tr-card" data-act="edit-transition" data-from="${esc(id)}" data-to="${esc(nextId)}"><span class="tr-label">Transition</span><span class="tr-title">${esc(t.title || 'Transition')}</span>${t.text ? `<span class="tr-text">${esc(t.text)}</span>` : ''}</button>`
-        : `<button class="tr-add" data-act="edit-transition" data-from="${esc(id)}" data-to="${esc(nextId)}" aria-label="Ajouter une transition entre ${esc(s.title)} et ${esc(songs[nextId].title)}">${ICON.plus}Transition</button>`}</li>`;
+        ? `<button class="tr-card" data-act="edit-transition" data-from="${esc(e.id)}" data-to="${esc(next.id)}"><span class="tr-label">Transition</span><span class="tr-title">${esc(t.title || 'Transition')}</span>${t.text ? `<span class="tr-text">${esc(t.text)}</span>` : ''}</button>`
+        : `<button class="tr-add" data-act="edit-transition" data-from="${esc(e.id)}" data-to="${esc(next.id)}" aria-label="Ajouter une transition entre ${esc(s.title)} et ${esc(next.song.title)}">${ICON.plus}Transition</button>`}</li>`;
     }
     return `
-      <li class="sl-row${metro.playing && metro.songId === id ? ' playing' : ''}" data-id="${esc(id)}">
+      <li class="sl-row${metro.playing && metro.songId === e.id ? ' playing' : ''}" data-id="${esc(e.id)}">
         <button class="grip" data-drag-handle aria-label="Déplacer ${esc(s.title)}">${ICON.grip}</button>
-        <span class="sl-num">${i + 1}</span>
+        <span class="sl-num">${num}</span>
         ${coverTile(s, 'sm')}
-        <button class="sl-main" data-act="open-song" data-id="${esc(id)}"><span class="title">${esc(s.title)}</span><span class="artist">${esc(s.artist)}</span>${tuneBits(s).length ? `<span class="tune-tag">${esc(tuneBits(s).join(', '))}</span>` : ''}</button>
+        <button class="sl-main" data-act="open-song" data-id="${esc(e.id)}"><span class="title">${esc(s.title)}</span><span class="artist">${esc(s.artist)}</span>${tuneBits(s).length ? `<span class="tune-tag">${esc(tuneBits(s).join(', '))}</span>` : ''}</button>
         <span class="sl-meta"><span class="bpm">${s.bpm || ''}</span><span class="key">${esc(s.key || '')}</span></span>
-        <button class="x" data-act="gig-remove-song" data-id="${esc(id)}" aria-label="Retirer ${esc(s.title)} de la setlist">${ICON.close}</button>
+        <button class="x" data-act="gig-remove-song" data-id="${esc(e.id)}" aria-label="Retirer ${esc(s.title)} de la setlist">${ICON.close}</button>
       </li>${gap}`;
   }).join('');
-  const total = ids.reduce((t, id) => t + (songs[id].duration || 0), 0);
-  const known = ids.filter((id) => songs[id].duration).length;
-  const countLabel = (n) => plural(n, 'morceau', 'morceaux') + (known ? `, environ ${Math.round(total / 60)} min${known < n ? ' (sans les durées manquantes)' : ''}` : '');
-  return head + gigChips() + gigHead(g, ids.length, countLabel) + `
-    ${ids.length ? `<div class="sl-tools">
+  const nSongs = entries.filter((e) => e.song).length;
+  const nItems = entries.length - nSongs;
+  const total = entries.reduce((t, e) => t + entrySecs(e), 0);
+  const missing = entries.filter((e) => e.song && !e.song.duration).length;
+  const target = Number(g.target) || 0;
+  const over = target && total > target * 60;
+  const countLabel = (n) => plural(n, 'morceau', 'morceaux') + (nItems ? ` et ${plural(nItems, 'intermède', 'intermèdes')}` : '')
+    + (total ? `, environ ${fmtMin(total)}${missing ? ' (sans les durées manquantes)' : ''}` : '');
+  return head + gigChips() + gigHead(g, nSongs, countLabel) + `
+    ${target ? `<div class="target${over ? ' over' : ''}"><div class="meter"><span style="width:${Math.min(100, (total / (target * 60)) * 100)}%"></span></div><span>${over ? `Trop long de ${fmtMin(total - target * 60)} pour les ${target} min prévues` : `${fmtMin(total)} sur les ${target} min prévues`}</span></div>` : ''}
+    ${entries.length ? `<div class="sl-tools">
       <button class="btn small primary" data-act="stage-open">${ICON.stage}Mode scène</button>
       <button class="btn small" data-act="print-setlist">${ICON.print}Imprimer</button>
     </div>` : ''}
-    ${ids.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Maintiens la poignée à gauche et fais glisser pour changer l’ordre. Touche « Transition » entre deux morceaux pour noter comment vous enchaînez.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
-    <div class="add-row"><button class="btn primary block" data-act="pick-songs">${ICON.plus}Ajouter des morceaux</button></div>`;
+    ${entries.length ? `<ol class="setlist" id="setlist">${rows}</ol><p class="hint">Maintiens la poignée à gauche et fais glisser pour changer l’ordre. Touche « Transition » entre deux morceaux pour noter comment vous enchaînez.</p>` : '<p class="empty-note">Aucun morceau dans cette setlist pour l’instant.</p>'}
+    <div class="add-row add-two">
+      <button class="btn primary" data-act="pick-songs">${ICON.plus}Ajouter des morceaux</button>
+      <button class="btn" data-act="new-item">${ICON.mic}Présentation, pause…</button>
+    </div>`;
 }
 
 /* ----- Planning ----- */
@@ -708,7 +868,66 @@ function dayPanel(iso, evByDate) {
     </div>`;
 }
 
+function planSeg() {
+  return `<div class="seg top-seg" role="group" aria-label="Vue">
+    <button data-act="plan-tab" data-v="agenda" aria-pressed="${app.planTab !== 'contacts'}">Agenda</button>
+    <button data-act="plan-tab" data-v="contacts" aria-pressed="${app.planTab === 'contacts'}">Contacts</button>
+  </div>`;
+}
+const CONTACT_KINDS = [['salle', 'Salles'], ['orga', 'Orgas'], ['son', 'Ingés son'], ['studio', 'Studios et répètes'], ['autre', 'Autres']];
+const telHref = (t) => { const d = String(t || '').replace(/[^0-9+]/g, ''); return d.length >= 6 ? 'tel:' + d : ''; };
+const mailHref = (m) => (/^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(m || '') ? 'mailto:' + m : '');
+
+function viewContacts() {
+  const all = Object.values(D('contacts')).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'fr'));
+  const head = `
+    <div class="section-head">
+      <h2>Planning</h2>
+      <button class="btn primary small" data-act="new-contact">${ICON.plus}Ajouter un contact</button>
+    </div>
+    ${planSeg()}`;
+  if (!all.length) return head + emptyCard('Le carnet est vide', 'Salles, orgas, ingés son, studios : garde leurs numéros ici, tout le groupe les retrouve.', 'new-contact', 'Ajouter un contact');
+  return head + CONTACT_KINDS.map(([k, label]) => {
+    const list = all.filter((c) => (CONTACT_KINDS.some(([kk]) => kk === c.kind) ? c.kind : 'autre') === k);
+    if (!list.length) return '';
+    return `
+      <section class="gear-group">
+        <h3>${esc(label)}<span class="count">${list.length}</span></h3>
+        <ul class="gear-list">${list.map((c) => {
+          const tel = telHref(c.phone), mail = mailHref(c.email);
+          return `
+          <li class="gear-row contact" data-act="edit-contact" data-id="${esc(c.id)}" tabindex="0" role="button">
+            <div class="gr-main"><span class="gr-name">${esc(c.name)}</span>${[c.place, c.phone, c.note].filter(Boolean).length ? `<span class="gr-details">${esc([c.place, c.phone, c.note].filter(Boolean).join(' · '))}</span>` : ''}</div>
+            <span class="ct-actions">
+              ${tel ? `<a class="ct-btn" href="${esc(tel)}" aria-label="Appeler ${esc(c.name)}">${ICON.phone}</a>` : ''}
+              ${mail ? `<a class="ct-btn" href="${esc(mail)}" aria-label="Écrire à ${esc(c.name)}">${ICON.mail}</a>` : ''}
+            </span>
+          </li>`;
+        }).join('')}</ul>
+      </section>`;
+  }).join('');
+}
+
+function sheetContact(s) {
+  const isNew = !s.id;
+  if (!isNew && !D('contacts')[s.id]) return null;
+  return `
+    ${sheetHead(isNew ? 'Nouveau contact' : 'Modifier le contact')}
+    <div class="form">
+      <div class="field"><label for="c-name">Nom</label><input id="c-name" class="input" data-draft="ct.name" value="${esc(draft('ct.name'))}" placeholder="ex. La Vapeur, Julie (programmation)"></div>
+      <div class="field"><label for="c-kind">Type</label><select id="c-kind" class="input" data-draft="ct.kind">${CONTACT_KINDS.map(([k, l]) => `<option value="${k}" ${draft('ct.kind', 'salle') === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <div class="grid-2">
+        <div class="field"><label for="c-phone">Téléphone</label><input id="c-phone" class="input" type="tel" data-draft="ct.phone" value="${esc(draft('ct.phone'))}" placeholder="06 12 34 56 78"></div>
+        <div class="field"><label for="c-email">E-mail</label><input id="c-email" class="input" type="email" data-draft="ct.email" value="${esc(draft('ct.email'))}" placeholder="prog@salle.fr"></div>
+      </div>
+      <div class="field"><label for="c-place">Lieu, adresse</label><input id="c-place" class="input" data-draft="ct.place" value="${esc(draft('ct.place'))}" placeholder="ex. 42 avenue de Stalingrad, Dijon"></div>
+      <div class="field"><label for="c-note">Infos</label><textarea id="c-note" class="input" data-draft="ct.note" placeholder="ex. Répond plutôt le soir, a vu notre concert de juin">${esc(draft('ct.note'))}</textarea></div>
+      ${formActions(isNew, 'contact-save', 'close-sheet', 'contact-delete')}
+    </div>`;
+}
+
 function viewPlanning() {
+  if (app.planTab === 'contacts') return viewContacts();
   const [y, m] = app.calMonth.split('-').map(Number);
   const first = new Date(y, m - 1, 1);
   const nDays = new Date(y, m, 0).getDate();
@@ -772,6 +991,7 @@ function viewPlanning() {
       <h2>Planning</h2>
       <button class="btn primary small" data-act="add-event">${ICON.plus}Ajouter une date</button>
     </div>
+    ${planSeg()}
     <div class="seg cal-mode" role="group" aria-label="Mode de l’agenda">
       <button data-act="cal-mode" data-v="fill" aria-pressed="${app.calMode === 'fill'}">Remplir mes dispos</button>
       <button data-act="cal-mode" data-v="view" aria-pressed="${app.calMode === 'view'}">Voir le détail</button>
@@ -808,13 +1028,160 @@ function gearGrouped(items) {
 }
 const qtyTag = (x) => ((x.qty || 1) > 1 ? ` <span class="qty">×${x.qty}</span>` : '');
 
+/* ----- Fiche technique ----- */
+const POSITIONS = [['bl', 'Fond gauche'], ['bc', 'Fond centre'], ['br', 'Fond droite'], ['fl', 'Devant gauche (jardin)'], ['fc', 'Devant centre'], ['fr', 'Devant droite (cour)']];
+const POS_XY = { bl: [70, 50], bc: [160, 50], br: [250, 50], fl: [70, 126], fc: [160, 126], fr: [250, 126] };
+const STANDS = ['', 'Petit pied', 'Grand pied perche', 'Pince', 'Aucun'];
+function bandSetup() {
+  const members = D('members');
+  const gear = Object.values(D('gear'));
+  return MEMBERS.map((m) => {
+    const role = (members[m.id] || {}).role || '';
+    const r = role.toLowerCase();
+    const owns = new Set(gear.filter((x) => x.owner === m.id).map((x) => x.cat));
+    const guess = (re, cat) => re.test(r) || (!r && owns.has(cat));
+    return {
+      m, role,
+      drums: guess(/batt|drum/, 'batterie'),
+      bass: guess(/bass/, 'basses'),
+      guitar: guess(/guit/, 'guitares'),
+      keys: guess(/clav|piano|synth|keys|orgue/, 'claviers'),
+      lead: /chant(?!.*ch(œ|oe)ur)|lead|voix/.test(r),
+      backing: /ch(œ|oe)ur/.test(r),
+    };
+  });
+}
+function techPositions() {
+  const saved = (D('tech').pos) || {};
+  const pos = {};
+  const taken = () => Object.values(pos);
+  const setup = bandSetup();
+  setup.forEach((x) => { if (POS_XY[saved[x.m.id]]) pos[x.m.id] = saved[x.m.id]; });
+  setup.filter((x) => !pos[x.m.id]).sort((a, b) => b.drums - a.drums || b.lead - a.lead).forEach((x) => {
+    const pref = x.drums ? ['bc', 'bl', 'br'] : x.lead ? ['fc', 'fl', 'fr'] : ['fl', 'fr', 'fc', 'bl', 'br', 'bc'];
+    pos[x.m.id] = pref.find((p) => !taken().includes(p)) || POSITIONS.map(([p]) => p).find((p) => !taken().includes(p)) || 'fc';
+  });
+  return pos;
+}
+function stagePlotSvg(print) {
+  const pos = techPositions();
+  const setup = bandSetup();
+  const people = setup.map((x) => {
+    const [cx, cy] = POS_XY[pos[x.m.id]];
+    const what = [x.drums && 'Batterie', x.bass && 'Basse', x.guitar && 'Guitare', x.keys && 'Clavier', (x.lead || x.backing) && (x.lead ? 'Chant' : 'Chœurs')].filter(Boolean).join(', ') || x.role;
+    return `
+      ${x.drums ? `<rect x="${cx - 40}" y="${cy - 30}" width="80" height="48" rx="6" class="sp-kit"/>` : ''}
+      ${x.lead || x.backing ? `<line x1="${cx + 15}" y1="${cy - 4}" x2="${cx + 22}" y2="${cy - 11}" class="sp-mic"/><circle cx="${cx + 23.5}" cy="${cy - 12.5}" r="3" class="sp-mic-dot"/>` : ''}
+      <circle cx="${cx}" cy="${cy}" r="12" fill="${x.m.color}"/>
+      <text x="${cx}" y="${cy + 4.2}" class="sp-ini">${esc(x.m.name[0])}</text>
+      <text x="${cx}" y="${cy - 17}" class="sp-name">${esc(x.m.name)}</text>
+      ${what ? `<text x="${cx}" y="${cy + 24}" class="sp-what">${esc(what.slice(0, 26))}</text>` : ''}`;
+  }).join('');
+  return `<svg class="plot${print ? ' print' : ''}" viewBox="0 0 320 200" role="img" aria-label="Plan de scène">
+    <rect x="8" y="8" width="304" height="164" rx="10" class="sp-stage"/>
+    <text x="160" y="190" class="sp-public">PUBLIC</text>
+    <text x="16" y="186" class="sp-side">Jardin</text><text x="304" y="186" class="sp-side" text-anchor="end">Cour</text>
+    ${people}
+  </svg>`;
+}
+function suggestInputs() {
+  const rows = [];
+  const add = (label, mic, stand, who) => rows.push({ id: newId('in'), label, mic, stand, who });
+  const setup = bandSetup();
+  setup.filter((x) => x.drums).forEach((x) => {
+    add('Grosse caisse', 'Beta 52 ou D112', 'Petit pied', x.m.id);
+    add('Caisse claire', 'SM57', 'Petit pied', x.m.id);
+    add('Charleston', 'Statique (SM81…)', 'Petit pied', x.m.id);
+    add('Tom alto', 'e604 ou SM57', 'Pince', x.m.id);
+    add('Tom basse', 'e604 ou SM57', 'Pince', x.m.id);
+    add('Overhead gauche', 'Statique', 'Grand pied perche', x.m.id);
+    add('Overhead droite', 'Statique', 'Grand pied perche', x.m.id);
+  });
+  setup.filter((x) => x.bass).forEach((x) => add('Basse', 'DI', 'Aucun', x.m.id));
+  setup.filter((x) => x.guitar).forEach((x) => add(`Guitare (${x.m.name})`, 'SM57 sur l’ampli', 'Petit pied', x.m.id));
+  setup.filter((x) => x.keys).forEach((x) => { add(`Clavier G (${x.m.name})`, 'DI', 'Aucun', x.m.id); add(`Clavier D (${x.m.name})`, 'DI', 'Aucun', x.m.id); });
+  setup.filter((x) => x.lead).forEach((x) => add(`Chant (${x.m.name})`, 'SM58', 'Grand pied perche', x.m.id));
+  setup.filter((x) => x.backing && !x.lead).forEach((x) => add(`Chœurs (${x.m.name})`, 'SM58', 'Grand pied perche', x.m.id));
+  return rows;
+}
+const BACKLINE_CATS = ['amplis', 'batterie', 'claviers', 'inears', 'sono'];
+function backline() {
+  return Object.values(D('gear')).filter((x) => BACKLINE_CATS.includes(x.cat)).sort((a, b) => BACKLINE_CATS.indexOf(a.cat) - BACKLINE_CATS.indexOf(b.cat) || a.name.localeCompare(b.name, 'fr'));
+}
+function viewTech() {
+  const tech = D('tech');
+  const inputs = Array.isArray(tech.inputs) ? tech.inputs : [];
+  const pos = techPositions();
+  const roles = bandSetup().filter((x) => x.role).length;
+  const bl = backline();
+  return `
+    <p class="lede">La fiche à envoyer à l’orga ou à la salle : plan de scène, entrées pour la table de mixage et matos apporté. Tout se remplit à partir des instruments de chacun (profil) et de l’inventaire.</p>
+    <h3 class="block-title">Plan de scène</h3>
+    <div class="plot-wrap">${stagePlotSvg()}</div>
+    <div class="pos-list">${MEMBERS.map((m) => `
+      <label class="pos-row"><span><i style="background:${m.color}"></i>${esc(m.name)}</span>
+        <select class="input" data-commit="tech-pos" data-id="${m.id}">${POSITIONS.map(([k, l]) => `<option value="${k}" ${pos[m.id] === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+      </label>`).join('')}
+    </div>
+    ${roles < MEMBERS.length ? `<p class="hint">Pense à renseigner l’instrument de chacun dans son profil (bouton en haut à droite) : la liste des entrées en dépend.</p>` : ''}
+    <h3 class="block-title">Liste des entrées<span class="bt-right"><button class="link-btn" data-act="tech-generate">${inputs.length ? 'Refaire depuis les rôles' : 'Remplir depuis les rôles'}</button></span></h3>
+    ${inputs.length ? `<ol class="inputs">${inputs.map((r, i) => `
+      <li class="in-row" data-act="edit-input" data-i="${i}" role="button" tabindex="0">
+        <span class="in-n">${i + 1}</span>
+        <div class="gr-main"><span class="gr-name">${esc(r.label)}</span><span class="gr-details">${esc([r.mic, r.stand && r.stand !== 'Aucun' ? r.stand.toLowerCase() : '', r.who ? memberName(r.who) : ''].filter(Boolean).join(' · '))}</span></div>
+      </li>`).join('')}</ol>` : '<p class="empty-note">Aucune entrée. Touche « Remplir depuis les rôles » ou ajoute-les une par une.</p>'}
+    <div class="add-row"><button class="btn" data-act="new-input">${ICON.plus}Ajouter une entrée</button></div>
+    <h3 class="block-title">Matos apporté par le groupe<span class="count">${bl.length || ''}</span></h3>
+    ${bl.length ? `<ul class="bl-list">${bl.map((x) => `<li><span>${esc(x.name)}${qtyTag(x)}</span><span class="owner">${esc(memberName(x.owner))}</span></li>`).join('')}</ul>` : '<p class="empty-note">Les amplis, la batterie, les claviers, les in-ears et la sono de l’inventaire apparaîtront ici.</p>'}
+    <h3 class="block-title">Infos pour l’orga</h3>
+    <textarea class="input" data-draft="tech.notes" placeholder="ex. 4 retours ou in-ears, 2 prises 220 V côté jardin, arrivée 18 h pour la balance">${esc(draft('tech.notes', tech.notes || ''))}</textarea>
+    <div class="chart-actions"><button class="btn" data-act="tech-notes-save">Enregistrer les infos</button></div>
+    <div class="add-row"><button class="btn primary block" data-act="tech-print">${ICON.print}Imprimer la fiche technique</button></div>`;
+}
+function sheetInput(s) {
+  const inputs = Array.isArray(D('tech').inputs) ? D('tech').inputs : [];
+  const isNew = s.i == null;
+  if (!isNew && !inputs[s.i]) return null;
+  return `
+    ${sheetHead(isNew ? 'Nouvelle entrée' : `Entrée ${s.i + 1}`)}
+    <div class="form">
+      <div class="field"><label for="in-label">Source</label><input id="in-label" class="input" data-draft="in.label" value="${esc(draft('in.label'))}" placeholder="ex. Guitare (Pierre)"></div>
+      <div class="field"><label for="in-mic">Micro ou DI</label><input id="in-mic" class="input" data-draft="in.mic" value="${esc(draft('in.mic'))}" placeholder="ex. SM57"></div>
+      <div class="grid-2">
+        <div class="field"><label for="in-stand">Pied</label><select id="in-stand" class="input" data-draft="in.stand">${STANDS.map((t) => `<option value="${esc(t)}" ${draft('in.stand') === t ? 'selected' : ''}>${esc(t || '—')}</option>`).join('')}</select></div>
+        <div class="field"><label for="in-who">Qui</label><select id="in-who" class="input" data-draft="in.who"><option value="">—</option>${MEMBERS.map((m) => `<option value="${m.id}" ${draft('in.who') === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></div>
+      </div>
+      ${formActions(isNew, 'input-save', 'close-sheet', 'input-delete')}
+    </div>`;
+}
+function printTech() {
+  const tech = D('tech');
+  const inputs = Array.isArray(tech.inputs) ? tech.inputs : [];
+  const setup = bandSetup();
+  const bl = backline();
+  $('#printArea').innerHTML = `
+    <div class="pr-head"><div class="pr-band">Hysteria</div><div class="pr-gig"><strong>Fiche technique</strong><br>${esc(fmtDay.format(new Date()))}</div></div>
+    <h2 class="pr-h">Le groupe</h2>
+    <p class="pr-p">${setup.map((x) => `<strong>${esc(x.m.name)}</strong>${x.role ? ' : ' + esc(x.role) : ''}`).join(' · ')}</p>
+    <h2 class="pr-h">Plan de scène</h2>
+    <div class="pr-plot">${stagePlotSvg(true)}</div>
+    <h2 class="pr-h">Liste des entrées</h2>
+    ${inputs.length ? `<table class="pr-table"><thead><tr><th>N°</th><th>Source</th><th>Micro / DI</th><th>Pied</th><th>Qui</th></tr></thead><tbody>${inputs.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(r.label)}</td><td>${esc(r.mic || '')}</td><td>${esc(r.stand || '')}</td><td>${esc(r.who ? memberName(r.who) : '')}</td></tr>`).join('')}</tbody></table>` : '<p class="pr-p">À définir.</p>'}
+    ${bl.length ? `<h2 class="pr-h">Matos apporté</h2><p class="pr-p">${bl.map((x) => `${esc(x.name)}${(x.qty || 1) > 1 ? ' ×' + x.qty : ''} (${esc(memberName(x.owner))})`).join(' · ')}</p>` : ''}
+    ${tech.notes ? `<h2 class="pr-h">Infos</h2><p class="pr-p" style="white-space:pre-wrap">${esc(tech.notes)}</p>` : ''}`;
+  if (PREVIEW) { toast('L’impression marche sur le site en ligne'); return; }
+  window.print();
+}
+
 function viewMatos() {
   const seg = `
     <div class="seg matos-seg" role="group" aria-label="Vue">
       <button data-act="matos-view" data-v="inventaire" aria-pressed="${app.matosView === 'inventaire'}">Inventaire</button>
       <button data-act="matos-view" data-v="concert" aria-pressed="${app.matosView === 'concert'}">Pour un concert</button>
+      <button data-act="matos-view" data-v="tech" aria-pressed="${app.matosView === 'tech'}">Fiche technique</button>
     </div>`;
   const gear = Object.values(D('gear'));
+  if (app.matosView === 'tech') return `<div class="section-head"><h2>Matos</h2></div>${seg}` + viewTech();
 
   if (app.matosView === 'inventaire') {
     const head = `
@@ -871,6 +1238,7 @@ function viewMatos() {
 function openSheet(s) {
   app.sheet = s;
   app.chartEdit = null;
+  app.partsEdit = null;
   renderSheet();
 }
 function closeSheet() {
@@ -897,6 +1265,9 @@ function renderSheet() {
     transition: sheetTransition,
     profile: sheetProfile,
     activity: sheetActivity,
+    item: sheetItem,
+    contact: sheetContact,
+    input: sheetInput,
   }[s.type];
   const html = fn ? fn(s) : null;
   if (html === null) { hide(); return; }
@@ -965,33 +1336,32 @@ function sheetSong(s) {
         : '<p class="empty-note" style="margin:0">Pas de tempo pour ce morceau. Ajoute-le dans « Modifier » pour avoir le click.</p>'}
     </div>
 
-    <h3 class="block-title">Paroles et accords</h3>
-    <div class="ext-links">${extLinks(song).map((l) => `
-      <a class="ext" href="${esc(l.url)}" target="_blank" rel="noopener"><b>${esc(l.label)}</b><span>${esc(l.site)}</span></a>`).join('')}
-    </div>
-    <div class="lyr-head">
-      <span>Paroles dans l’appli</span>
-      <button class="link-btn" data-act="lyrics-toggle" aria-expanded="${app.showLyrics}">${app.showLyrics ? 'Masquer' : 'Afficher'}</button>
-    </div>
-    ${app.showLyrics ? lyricsBody(song) : ''}
+    <h3 class="block-title">Accords et paroles</h3>
+    ${chordBlock(song)}
+    <a class="out-link" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
 
     <h3 class="block-title">Ton niveau${app.me ? '' : ' (choisis ton profil)'}</h3>
     <div class="levels" role="group" aria-label="Ton niveau">
       ${LEVELS.map((l) => `<button data-act="set-level" data-v="${l.v}" aria-pressed="${mine === l.v}" ${app.me ? '' : 'disabled'}><i class="lvl-sw-${l.v}"></i>${esc(l.label)}</button>`).join('')}
     </div>
 
-    <h3 class="block-title">Le groupe</h3>
+    <h3 class="block-title">Le groupe<span class="bt-right">${app.partsEdit === song.id ? '' : `<button class="link-btn" data-act="parts-edit">${Object.values(song.parts || {}).some((t) => t) ? 'Modifier qui fait quoi' : 'Qui fait quoi ?'}</button>`}</span></h3>
     <div class="band-levels">
       ${MEMBERS.map((m) => {
         const v = lv[m.id] || 0;
         const role = (members[m.id] || {}).role;
+        const part = ((song.parts || {})[m.id] || '').trim();
         return `<div class="bl">
           <span class="bl-name">${esc(m.name)}${role ? `<small>${esc(role)}</small>` : ''}</span>
           <span class="bl-label">${esc(levelLabel(v))}</span>
           <div class="bl-bar"><span style="width:${v * 25}%;background:${LV_COLORS[v]}"></span></div>
+          ${app.partsEdit === song.id
+            ? `<input class="input bl-input" data-draft="parts.${m.id}" value="${esc(draft('parts.' + m.id, part))}" placeholder="ex. chœurs au refrain, solo final, lance le morceau" maxlength="140" aria-label="Rôle de ${esc(m.name)} sur ce morceau">`
+            : part ? `<span class="bl-part">${esc(part)}</span>` : ''}
         </div>`;
       }).join('')}
     </div>
+    ${app.partsEdit === song.id ? '<div class="chart-actions"><button class="btn primary" data-act="parts-save">Enregistrer</button><button class="btn ghost" data-act="parts-cancel">Annuler</button></div>' : ''}
 
     <h3 class="block-title">Notre grille</h3>
     ${editing ? `
@@ -1013,7 +1383,9 @@ function sheetSong(s) {
     <div class="composer">
       <textarea class="input" id="noteText" data-draft="note.${esc(song.id)}" placeholder="Ex. On rallonge le solo, Quentin lance le refrain final" aria-label="Nouvelle note">${esc(draft('note.' + song.id))}</textarea>
       <div><button class="btn" data-act="note-add">Ajouter la note</button></div>
-    </div>`;
+    </div>
+
+    `;
 }
 
 function sheetSongEdit(s) {
@@ -1050,12 +1422,16 @@ function sheetSongEdit(s) {
       ${picked.title ? `<div class="picked">${coverTile(picked, 'sm')}<span>Tu peux corriger les infos ci-dessous avant d’ajouter.</span></div>` : ''}`;
   }
   return `
-    ${sheetHead(isNew ? 'Nouveau morceau' : 'Modifier le morceau')}
+    ${sheetHead(s.idea ? 'Proposer un morceau' : isNew ? 'Nouveau morceau' : 'Modifier le morceau', s.idea ? 'Il arrive dans les idées, les autres votent.' : '')}
     <div class="form">
       ${search}
       <div class="field"><label for="f-title">Titre</label><input id="f-title" class="input" data-draft="song.title" value="${esc(draft('song.title'))}" autocomplete="off"></div>
       <div class="field"><label for="f-artist">Artiste</label><input id="f-artist" class="input" data-draft="song.artist" value="${esc(draft('song.artist'))}" autocomplete="off"></div>
-      <div class="grid-2">
+      ${s.idea ? `
+      <div class="field"><label for="f-note">Pourquoi celui-là ? (facultatif)</label><textarea id="f-note" class="input" data-draft="song.note" placeholder="ex. Gros riff, facile à caler, ça marcherait en ouverture">${esc(draft('song.note'))}</textarea></div>
+      ${formActions(true, 'song-save', 'close-sheet', '', 'Proposer')}
+    </div>` : ''}
+      ${s.idea ? '' : `<div class="grid-2">
         <div class="field"><label for="f-bpm">Tempo (BPM)</label><input id="f-bpm" class="input" inputmode="numeric" data-draft="song.bpm" value="${esc(draft('song.bpm'))}" placeholder="ex. 120"></div>
         <div class="field"><label for="f-key">Tonalité</label><input id="f-key" class="input" data-draft="song.key" value="${esc(draft('song.key'))}" placeholder="ex. F♯m"></div>
       </div>
@@ -1065,7 +1441,7 @@ function sheetSongEdit(s) {
       </div>
       <div class="field"><label for="f-link">Lien d’écoute</label><input id="f-link" class="input" type="url" data-draft="song.link" value="${esc(draft('song.link'))}" placeholder="Rempli tout seul si tu le laisses vide"></div>
       ${formActions(isNew, 'song-save', 'song-cancel', 'song-delete')}
-    </div>`;
+    </div>`}`;
 }
 
 // Recherche de morceaux (suggestions à la saisie), avec un petit délai.
@@ -1190,15 +1566,35 @@ function sheetGig(s) {
     ${sheetHead(isNew ? 'Nouvelle setlist' : 'Modifier le concert', isNew ? 'Une setlist par concert, avec son matos à emmener.' : '')}
     <div class="form">
       <div class="field"><label for="g-name">Nom du concert</label><input id="g-name" class="input" data-draft="gig.name" data-enter="gig-save" value="${esc(draft('gig.name'))}" placeholder="ex. Fête de la musique"></div>
-      <div class="field"><label for="g-date">Date (facultatif)</label><input id="g-date" class="input" type="date" data-draft="gig.date" value="${esc(draft('gig.date'))}"></div>
+      <div class="grid-2">
+        <div class="field"><label for="g-date">Date (facultatif)</label><input id="g-date" class="input" type="date" data-draft="gig.date" value="${esc(draft('gig.date'))}"></div>
+        <div class="field"><label for="g-target">Durée prévue (min)</label><input id="g-target" class="input" type="number" inputmode="numeric" min="0" max="600" data-draft="gig.target" value="${esc(draft('gig.target'))}" placeholder="ex. 45"></div>
+      </div>
       ${formActions(isNew, 'gig-save', 'close-sheet', 'gig-delete', isNew ? 'Créer' : '')}
+    </div>`;
+}
+
+function sheetItem(s) {
+  const g = currentGig();
+  if (!g) return null;
+  const isNew = !s.id;
+  if (!isNew && !(g.items || {})[s.id]) return null;
+  const title = draft('item.title');
+  return `
+    ${sheetHead(isNew ? 'Ajouter un intermède' : 'Modifier l’intermède', isNew ? 'Une présentation, une pause, des remerciements… il se range dans la setlist comme un morceau.' : '')}
+    <div class="form">
+      <div class="chips">${ITEM_PRESETS.map((t) => `<button class="chip" data-act="item-preset" data-v="${esc(t)}" aria-pressed="${title === t}">${esc(t)}</button>`).join('')}</div>
+      <div class="field"><label for="i-title">Intitulé</label><input id="i-title" class="input" data-draft="item.title" value="${esc(title)}" placeholder="ex. Présentation du groupe" maxlength="80"></div>
+      <div class="field" style="max-width:160px"><label for="i-dur">Durée (min)</label><input id="i-dur" class="input" type="number" inputmode="numeric" min="0" max="60" data-draft="item.dur" value="${esc(draft('item.dur', '1'))}"></div>
+      <div class="field"><label for="i-note">Qui, quoi (facultatif)</label><textarea id="i-note" class="input" data-draft="item.note" placeholder="ex. Pierre présente, Mathieu fait un roulement pendant ce temps">${esc(draft('item.note'))}</textarea></div>
+      ${formActions(isNew, 'item-save', 'close-sheet', 'item-delete')}
     </div>`;
 }
 
 function sheetPickSongs() {
   const g = D('gigs')[app.gigId];
   if (!g) return null;
-  const inGig = new Set(g.songs || []);
+  const inGig = new Set((g.songs || []).filter((id) => D('songs')[id]));
   const q = draft('pick.q').trim().toLowerCase();
   const list = songsList().filter((s) => !q || (s.title + ' ' + s.artist).toLowerCase().includes(q));
   return `
@@ -1319,8 +1715,25 @@ function sheetActivity() {
 /* ----- Mode scène ----- */
 function stageIds() {
   const g = app.stage && D('gigs')[app.stage.gigId];
-  const songs = D('songs');
-  return g ? (g.songs || []).filter((id) => songs[id]) : [];
+  return g ? gigEntries(g).map((e) => e.id) : [];
+}
+const fmtClock = (sec) => `${Math.floor(sec / 60)}:${pad(Math.floor(sec % 60))}`;
+function chronoElapsed(st) { return (st.acc || 0) + (st.t0 ? (Date.now() - st.t0) / 1000 : 0); }
+function chronoHtml(st) {
+  const g = D('gigs')[st.gigId];
+  const entries = g ? gigEntries(g) : [];
+  const left = entries.slice(st.idx).reduce((t, e) => t + (entrySecs(e) || (e.song ? AVG_SONG : 0)), 0);
+  const el = chronoElapsed(st);
+  const target = Number(g && g.target) || 0;
+  const end = el + left;
+  let cls = '', extra = `reste ~${fmtMin(left)}`;
+  if (target) {
+    const diff = end - target * 60;
+    if (diff > 60) { cls = ' over'; extra = `+${fmtMin(diff)} sur ${target} min`; }
+    else extra = `reste ~${fmtMin(left)} sur ${target}`;
+  }
+  if (!st.t0 && !st.acc) return `<button class="st-chrono" data-act="stage-chrono"><b>Chrono</b><small>toucher pour lancer</small></button>`;
+  return `<button class="st-chrono${cls}${st.t0 ? '' : ' paused'}" data-act="stage-chrono" aria-label="Chrono du concert"><b>${fmtClock(el)}</b><small>${esc(extra)}</small></button>`;
 }
 function renderStage() {
   const el = $('#stage');
@@ -1330,25 +1743,26 @@ function renderStage() {
     return;
   }
   const g = D('gigs')[st.gigId];
-  const ids = stageIds();
-  if (!g || !ids.length) { stageExit(); return; }
-  st.idx = Math.max(0, Math.min(st.idx, ids.length - 1));
-  const songs = D('songs');
-  const s = songs[ids[st.idx]];
-  const prev = songs[ids[st.idx - 1]];
-  const nxt = songs[ids[st.idx + 1]];
-  const tr = nxt ? (g.transitions || {})[s.id + '__' + nxt.id] : null;
-  const playing = metro.playing && metro.songId === s.id;
-  const tune = tuningOf(s);
-  const tuneChanged = !!prev && tuningOf(prev) !== tune;
-  const nxtChange = nxt && (tuningOf(nxt) !== tune || (nxt.capo || 0) !== (s.capo || 0));
-  const html = `
-    <div class="st-top">
-      <button class="st-quit" data-act="stage-exit">${ICON.prev}Quitter</button>
-      <span class="st-gig">${esc(g.name)}</span>
-      <span class="st-pos"><b>${st.idx + 1}</b> / ${ids.length}</span>
-    </div>
-    <div class="st-body">
+  const entries = g ? gigEntries(g) : [];
+  if (!g || !entries.length) { stageExit(); return; }
+  st.idx = Math.max(0, Math.min(st.idx, entries.length - 1));
+  const cur = entries[st.idx];
+  const nextE = entries[st.idx + 1];
+  const prevSong = entries.slice(0, st.idx).reverse().find((e) => e.song);
+  const s = cur.song;
+  const nxt = nextE && nextE.song;
+  const tr = s && nxt ? (g.transitions || {})[cur.id + '__' + nextE.id] : null;
+  const playing = s && metro.playing && metro.songId === s.id;
+  const tune = s ? tuningOf(s) : '';
+  const tuneChanged = s && prevSong && tuningOf(prevSong.song) !== tune;
+  const refSong = s || (prevSong && prevSong.song);
+  const nxtChange = nxt && refSong && (tuningOf(nxt) !== tuningOf(refSong) || (nxt.capo || 0) !== (refSong.capo || 0));
+  const songNum = entries.slice(0, st.idx + 1).filter((e) => e.song).length;
+  const nSongs = entries.filter((e) => e.song).length;
+  const parts = s ? MEMBERS.map((m) => [m, ((s.parts || {})[m.id] || '').trim()]).filter(([, t]) => t) : [];
+  const factor = s ? Math.max(0.4, Math.min(2.5, Number(s.scrollx) || 1)) : 1;
+
+  const songBody = s ? `
       <div>
         <h2 class="st-title">${esc(s.title)}</h2>
         <div class="st-artist" style="margin-top:6px">${esc(s.artist)}</div>
@@ -1359,34 +1773,105 @@ function renderStage() {
         <div><b class="word${tuneChanged ? ' warn' : ''}">${esc(tune || 'Standard')}</b><small>Accordage${tuneChanged ? ', ça change' : ''}</small></div>
         ${s.capo > 0 ? `<div><b>${s.capo}</b><small>Capo</small></div>` : ''}
       </div>
-      <div class="st-click">
-        <button class="st-btn${playing ? ' on' : ''}" data-act="stage-click" ${s.bpm ? '' : 'disabled'}>${playing ? ICON.stop + 'Arrêter le click' : ICON.play + (s.bpm ? 'Lancer le click' : 'Pas de tempo')}</button>
+      ${parts.length ? `<ul class="st-parts">${parts.map(([m, t]) => `<li class="${m.id === app.me ? 'mine' : ''}"><i style="background:${m.color}"></i><b>${esc(m.name)}</b> ${esc(t)}</li>`).join('')}</ul>` : ''}
+      <div class="st-tools">
+        <button class="st-btn${playing ? ' on' : ''}" data-act="stage-click" ${s.bpm ? '' : 'disabled'}>${playing ? ICON.stop + 'Click' : ICON.play + (s.bpm ? 'Click' : 'Pas de tempo')}</button>
         ${playing ? '<div class="beats" aria-hidden="true"><i class="accent"></i><i></i><i></i><i></i></div>' : ''}
-        <button class="st-btn" data-act="stage-auto" aria-pressed="${!!st.auto}" title="Lance le click tout seul à chaque morceau">Click auto ${st.auto ? 'activé' : 'désactivé'}</button>
-        <button class="st-btn" data-act="stage-lyrics" aria-pressed="${!!st.lyrics}">Paroles</button>
+        <button class="st-btn" data-act="stage-auto" aria-pressed="${!!st.auto}" title="Lance le click tout seul à chaque morceau">Click auto</button>
+        <span class="st-group">
+          <button class="st-btn${st.scroll && !st.paused ? ' on' : ''}" data-act="stage-scroll">${st.scroll && !st.paused ? ICON.pause + 'Défilement' : ICON.scroll + (st.scroll ? 'Reprendre' : 'Défilement')}</button>
+          ${st.scroll ? `<button class="st-mini" data-act="scroll-speed" data-v="-1" aria-label="Plus lent">−</button><span class="st-val">×${String(Math.round(factor * 10) / 10).replace('.', ',')}</span><button class="st-mini" data-act="scroll-speed" data-v="1" aria-label="Plus vite">+</button>` : ''}
+        </span>
+        <button class="st-btn" data-act="stage-lyrics" aria-pressed="${!!st.lyrics}">Accords et paroles</button>
       </div>
       ${s.chart ? `<pre class="st-chart">${esc(s.chart)}</pre>` : ''}
-      ${st.lyrics ? `<div class="st-lyr">${lyricsBody(s, 'st-lyrics')}</div>` : ''}
+      ${st.lyrics ? `<div class="st-lyr">${chordBlock(s, true)}</div>` : ''}` : `
+      <div>
+        <div class="st-kind">Intermède</div>
+        <h2 class="st-title">${esc(cur.item.title)}</h2>
+        ${cur.item.dur ? `<div class="st-artist" style="margin-top:6px">${esc(cur.item.dur)} min</div>` : ''}
+      </div>
+      ${cur.item.note ? `<p class="st-note">${esc(cur.item.note)}</p>` : ''}`;
+
+  const nextHtml = nextE
+    ? (nxt ? `<div class="st-nx"><div class="nx-main"><small>Ensuite</small><b>${esc(nxt.title)}</b></div>
+          <div class="nx-meta">${[nxt.bpm ? nxt.bpm + ' bpm' : '', esc(nxt.key || '')].filter(Boolean).join(' · ')}${nxtChange ? `<span class="nx-warn">${esc([tuningOf(nxt) || 'Standard', nxt.capo > 0 ? 'capo ' + nxt.capo : 'sans capo'].join(', '))}</span>` : ''}</div></div>`
+      : `<div class="st-nx"><div class="nx-main"><small>Ensuite</small><b>${esc(nextE.item.title)}</b></div><div class="nx-meta">${nextE.item.dur ? esc(nextE.item.dur) + ' min' : ''}</div></div>`)
+    : '<div class="st-end">Dernier morceau.</div>';
+
+  const html = `
+    <div class="st-top">
+      <button class="st-quit" data-act="stage-exit">${ICON.prev}Quitter</button>
+      ${chronoHtml(st)}
+      <span class="st-pos">${s ? `<b>${songNum}</b> / ${nSongs}` : '<b>·</b>'}</span>
+    </div>
+    <div class="st-body">
+      ${songBody}
       <div class="st-next">
         ${tr ? `<div class="st-tr"><small>Transition</small><b>${esc(tr.title || 'Transition')}</b>${tr.text ? `<p>${esc(tr.text)}</p>` : ''}</div>` : ''}
-        ${nxt ? `<div class="st-nx"><div class="nx-main"><small>Ensuite</small><b>${esc(nxt.title)}</b></div>
-            <div class="nx-meta">${[nxt.bpm ? nxt.bpm + ' bpm' : '', esc(nxt.key || '')].filter(Boolean).join(' · ')}${nxtChange ? `<span class="nx-warn">${esc([tuningOf(nxt) || 'Standard', nxt.capo > 0 ? 'capo ' + nxt.capo : 'sans capo'].join(', '))}</span>` : ''}</div></div>`
-          : '<div class="st-end">Dernier morceau.</div>'}
+        ${nextHtml}
       </div>
     </div>
-    <div class="st-nav">
-      <button data-act="stage-go" data-v="-1" ${st.idx ? '' : 'disabled'} aria-label="Morceau précédent">${ICON.prev}Précédent</button>
-      <button data-act="stage-go" data-v="1" ${nxt ? '' : 'disabled'} aria-label="Morceau suivant">Suivant${ICON.next}</button>
+    <div class="st-bar">
+      <span class="st-group">
+        <button class="st-mini" data-act="stage-zoom" data-v="-1" aria-label="Texte plus petit">A−</button>
+        <button class="st-mini" data-act="stage-zoom" data-v="1" aria-label="Texte plus grand">A+</button>
+      </span>
+      <button class="st-mini wide" data-act="stage-lock">${ICON.lock}Verrouiller</button>
     </div>
-    <div class="st-hint">Glisse vers la gauche ou la droite, ou utilise un pédalier (flèches, page suivante).</div>`;
+    <div class="st-nav">
+      <button data-act="stage-go" data-v="-1" ${st.idx ? '' : 'disabled'} aria-label="Précédent">${ICON.prev}Précédent</button>
+      <button data-act="stage-go" data-v="1" ${nextE ? '' : 'disabled'} aria-label="Suivant">Suivant${ICON.next}</button>
+    </div>
+    ${st.locked ? `<div class="st-lock"><button class="st-unlock" data-hold="unlock">${ICON.lock}<span>Maintiens pour déverrouiller</span></button><p>Écran verrouillé : le pédalier marche toujours.</p></div>` : ''}`;
   const body = el.querySelector('.st-body');
-  const keep = st.shown === s.id && body ? body.scrollTop : 0;
+  const keep = st.shown === cur.id && body ? body.scrollTop : 0;
+  el.style.setProperty('--zoom', String(st.zoom || 1));
   el.innerHTML = html;
   el.hidden = false;
   const nb = el.querySelector('.st-body');
   if (nb) nb.scrollTop = keep;
-  st.shown = s.id;
+  if (st.shown !== cur.id) { st.pos = 0; st.lastSet = 0; st.scrollStart = performance.now() + 2500; }
+  st.shown = cur.id;
+  if (st.scroll && !st.paused) startScroll();
 }
+
+// Défilement automatique : la grille passe en entier sur la durée du morceau (ou son tempo à défaut).
+function scrollDuration(s) {
+  if (s.duration) return s.duration;
+  const sh = app.sheets[lyricsKey(s)];
+  const lines = sh && sh.state === 'ok' ? sh.content.split('\n').filter((l) => l.trim() && !/^\s*(\[ch\][^\[]*\[\/ch\]\s*)+$/.test(l) && !/^\s*\[[^\]]+\]\s*$/.test(l)).length : 0;
+  if (lines && s.bpm) return Math.max(90, lines * 2 * 4 * 60 / s.bpm); // une ligne de paroles ≈ 2 mesures
+  return 210;
+}
+function startScroll() {
+  if (scrollLoop.on) return;
+  scrollLoop.on = true;
+  scrollLoop.t = performance.now();
+  requestAnimationFrame(scrollLoop);
+}
+function scrollLoop(now) {
+  const st = app.stage;
+  if (!st || !st.scroll || st.paused) { scrollLoop.on = false; return; }
+  const dt = Math.min(0.1, (now - scrollLoop.t) / 1000);
+  scrollLoop.t = now;
+  requestAnimationFrame(scrollLoop);
+  const b = document.querySelector('#stage .st-body');
+  const s = D('songs')[stageIds()[st.idx]];
+  if (!b || !s || now < (st.scrollStart || 0)) return;
+  if (Math.abs(b.scrollTop - (st.lastSet || 0)) > 3) st.pos = b.scrollTop; // on a fait défiler à la main
+  const max = b.scrollHeight - b.clientHeight;
+  if (max <= 0 || st.pos >= max) return;
+  const factor = Math.max(0.4, Math.min(2.5, Number(s.scrollx) || 1));
+  st.pos = Math.min(max, (st.pos || 0) + (max / scrollDuration(s)) * factor * dt);
+  b.scrollTop = st.pos;
+  st.lastSet = b.scrollTop;
+}
+setInterval(() => {
+  const st = app.stage;
+  const c = st && st.t0 && document.querySelector('#stage .st-chrono');
+  if (c) c.outerHTML = chronoHtml(st);
+}, 1000);
 async function keepAwake(on) {
   try {
     if (on && !app.wake && navigator.wakeLock) {
@@ -1407,7 +1892,7 @@ function stageGo(d) {
   if (n < 0 || n >= ids.length) return;
   st.idx = n;
   const s = D('songs')[ids[n]];
-  if (st.auto && s.bpm) metro.start(s.id, s.bpm);
+  if (st.auto && s && s.bpm) metro.start(s.id, s.bpm);
   else if (metro.playing) metro.stop();
   else renderStage();
 }
@@ -1424,23 +1909,26 @@ function stageExit() {
 function printSetlist() {
   const g = currentGig();
   if (!g) return;
-  const songs = D('songs');
-  const ids = (g.songs || []).filter((id) => songs[id]);
-  if (!ids.length) { toast('La setlist est vide'); return; }
+  const entries = gigEntries(g);
+  if (!entries.length) { toast('La setlist est vide'); return; }
   const tr = g.transitions || {};
-  const rows = ids.map((id, i) => {
-    const s = songs[id];
-    const t = ids[i + 1] && tr[id + '__' + ids[i + 1]];
+  let num = 0;
+  const rows = entries.map((e, i) => {
+    if (e.item) return `<li class="pr-item">${esc(e.item.title)}${e.item.dur ? ` (${esc(e.item.dur)} min)` : ''}${e.item.note ? ` : ${esc(e.item.note)}` : ''}</li>`;
+    const s = e.song;
+    num++;
+    const next = entries[i + 1];
+    const t = next && next.song && tr[e.id + '__' + next.id];
     const meta = [s.bpm ? s.bpm + ' bpm' : '', s.key || ''].filter(Boolean).join(' · ');
     const tune = tuneBits(s).join(', ');
-    return `<li class="pr-row"><span class="pr-n">${i + 1}</span><span class="pr-t">${esc(s.title)}<small>${esc(s.artist)}</small></span><span class="pr-m">${esc(meta)}${tune ? `<em>${esc(tune)}</em>` : ''}</span></li>`
+    return `<li class="pr-row"><span class="pr-n">${num}</span><span class="pr-t">${esc(s.title)}<small>${esc(s.artist)}</small></span><span class="pr-m">${esc(meta)}${tune ? `<em>${esc(tune)}</em>` : ''}</span></li>`
       + (t ? `<li class="pr-tr">↳ ${esc(t.title || 'Transition')}${t.text ? ' : ' + esc(t.text) : ''}</li>` : '');
   }).join('');
-  const total = ids.reduce((n, id) => n + (songs[id].duration || 0), 0);
+  const total = entries.reduce((n, e) => n + entrySecs(e), 0);
   $('#printArea').innerHTML = `
     <div class="pr-head"><div class="pr-band">Hysteria</div><div class="pr-gig"><strong>${esc(g.name)}</strong>${g.date ? '<br>' + esc(fmtDay.format(parseISO(g.date))) : ''}</div></div>
     <ol class="pr-list">${rows}</ol>
-    <div class="pr-foot">${plural(ids.length, 'morceau', 'morceaux')}${total ? `, environ ${Math.round(total / 60)} min` : ''}</div>`;
+    <div class="pr-foot">${plural(num, 'morceau', 'morceaux')}${total ? `, environ ${fmtMin(total)}` : ''}${g.target ? ` (prévu : ${esc(g.target)} min)` : ''}</div>`;
   if (PREVIEW) { toast('L’impression marche sur le site en ligne'); return; }
   window.print();
 }
@@ -1532,12 +2020,23 @@ function renderOverlay(wrong) {
 }
 
 /* ================= Petits outils ================= */
-function toast(msg) {
+function toast(msg, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  t.innerHTML = '';
+  const span = document.createElement('span');
+  span.textContent = msg;
+  t.appendChild(span);
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'toast-act';
+    b.textContent = action.label;
+    b.onclick = () => { t.classList.remove('show'); clearTimeout(toast._t); action.fn(); };
+    t.appendChild(b);
+  }
+  t.classList.toggle('has-act', !!action);
   t.classList.add('show');
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('show'), 2200);
+  toast._t = setTimeout(() => t.classList.remove('show'), action ? 6000 : 2200);
 }
 
 // Confirmation dans la page (les fenêtres confirm() du navigateur ne marchent pas partout).
@@ -1558,6 +2057,24 @@ function askConfirm(text, ok = 'Supprimer') {
   });
 }
 
+// Annuler : on calcule les opérations inverses avant d'appliquer une suppression.
+function getAt(o, path) { let n = o; for (const k of path) { if (!n || typeof n !== 'object') return undefined; n = n[k]; } return n; }
+function inverseOps(ops) {
+  const sim = clone(app.view);
+  const inv = [];
+  for (const o of ops) {
+    const prev = getAt(sim, o.path);
+    inv.unshift(prev === undefined ? { op: 'del', path: o.path } : { op: 'set', path: o.path, value: clone(prev) });
+    applyOps(sim, [clone(o)]);
+  }
+  return inv;
+}
+function commitUndoable(ops, msg) {
+  const inv = inverseOps(ops);
+  commit(ops);
+  toast(msg, { label: 'Annuler', fn: () => { commit(inv); toast('C’est annulé'); } });
+}
+
 function clearDrafts(prefix) {
   Object.keys(app.drafts).forEach((k) => { if (k.startsWith(prefix)) delete app.drafts[k]; });
 }
@@ -1575,6 +2092,113 @@ const actions = {
     window.scrollTo({ top: 0 });
   },
   'rep-sort'(el) { app.repSort = el.dataset.v; renderView(); },
+  'rep-tab'(el) { app.repTab = el.dataset.v === 'ideas' ? 'ideas' : 'songs'; LS.set('hy.repTab', app.repTab); renderView(); },
+  'plan-tab'(el) { app.planTab = el.dataset.v === 'contacts' ? 'contacts' : 'agenda'; LS.set('hy.planTab', app.planTab); renderView(); },
+  'add-idea'() {
+    clearDrafts('song.');
+    app.suggest = { q: '', items: [] };
+    openSheet({ type: 'song', id: null, edit: true, idea: true });
+    setTimeout(() => { const i = $('#f-search') || $('#f-title'); if (i) i.focus(); }, 60);
+  },
+  'idea-vote'(el) {
+    if (!app.me) return;
+    const it = D('ideas')[el.dataset.id];
+    if (!it) return;
+    const v = Number(el.dataset.v);
+    const votes = { ...(it.votes || {}) };
+    if (votes[app.me] === v) delete votes[app.me]; else votes[app.me] = v;
+    const pour = Object.values(votes).filter((x) => x === 1).length;
+    if (pour >= NEED) {
+      const id = newId('s');
+      commit([
+        { op: 'set', path: ['songs', id], value: { id, title: it.title, artist: it.artist, key: '', bpm: null, link: ytMusic(it.artist + ' ' + it.title), cover: safeUrl(it.cover), duration: it.duration || null, tuning: 'Standard', capo: 0, levels: {} } },
+        { op: 'del', path: ['ideas', it.id] },
+        ...logOps(`a fait passer «\u00a0${it.title}\u00a0» au répertoire (${pour} voix pour)`),
+      ]);
+      toast(`Majorité : «\u00a0${it.title}\u00a0» rejoint le répertoire`);
+      return;
+    }
+    commit([{ op: 'set', path: ['ideas', it.id, 'votes'], value: votes }, ...(votes[app.me] ? logOps(`a voté ${v > 0 ? 'pour' : 'contre'} «\u00a0${it.title}\u00a0»`, 'vote:' + it.id) : [])]);
+  },
+  'idea-del'(el) {
+    const it = D('ideas')[el.dataset.id];
+    if (!it) return;
+    commitUndoable([{ op: 'del', path: ['ideas', it.id] }], 'Idée retirée');
+  },
+  'new-contact'() { clearDrafts('ct.'); openSheet({ type: 'contact', id: null }); setTimeout(() => { const i = $('#c-name'); if (i) i.focus(); }, 60); },
+  'edit-contact'(el) {
+    const c = D('contacts')[el.dataset.id];
+    if (!c) return;
+    clearDrafts('ct.');
+    Object.assign(app.drafts, { 'ct.name': c.name || '', 'ct.kind': c.kind || 'autre', 'ct.phone': c.phone || '', 'ct.email': c.email || '', 'ct.place': c.place || '', 'ct.note': c.note || '' });
+    openSheet({ type: 'contact', id: c.id });
+  },
+  'contact-save'() {
+    const name = draft('ct.name').trim();
+    if (!name) { toast('Donne au moins un nom'); return; }
+    const fields = { name, kind: draft('ct.kind', 'salle'), phone: draft('ct.phone').trim(), email: draft('ct.email').trim(), place: draft('ct.place').trim(), note: draft('ct.note').trim() };
+    if (app.sheet.id) commit(Object.entries(fields).map(([k, v]) => ({ op: 'set', path: ['contacts', app.sheet.id, k], value: v })));
+    else {
+      const id = newId('c');
+      commit([{ op: 'set', path: ['contacts', id], value: { id, ...fields, by: app.me, ts: Date.now() } }, ...logOps(`a ajouté ${name} aux contacts`, 'contact-add', 'a ajouté des contacts')]);
+    }
+    clearDrafts('ct.');
+    closeSheet();
+  },
+  'contact-delete'() {
+    const c = D('contacts')[app.sheet.id];
+    if (!c) return;
+    closeSheet();
+    commitUndoable([{ op: 'del', path: ['contacts', c.id] }], `${c.name} supprimé des contacts`);
+  },
+  'tech-pos'(el) {
+    const pos = { ...techPositions(), [el.dataset.id]: el.value };
+    // Si la place était prise, on échange.
+    const other = MEMBERS.find((m) => m.id !== el.dataset.id && pos[m.id] === el.value);
+    if (other) pos[other.id] = techPositions()[el.dataset.id];
+    commit([{ op: 'set', path: ['tech', 'pos'], value: pos }]);
+  },
+  async 'tech-generate'() {
+    const rows = suggestInputs();
+    if (!rows.length) { toast('Renseigne d’abord l’instrument de chacun dans son profil'); return; }
+    const cur = D('tech').inputs;
+    if (Array.isArray(cur) && cur.length && !(await askConfirm('Remplacer la liste actuelle par celle déduite des rôles ?', 'Remplacer'))) return;
+    commitUndoable([{ op: 'set', path: ['tech', 'inputs'], value: rows }], `${rows.length} entrées proposées`);
+  },
+  'new-input'() { clearDrafts('in.'); openSheet({ type: 'input', i: null }); },
+  'edit-input'(el) {
+    const r = (D('tech').inputs || [])[Number(el.dataset.i)];
+    if (!r) return;
+    clearDrafts('in.');
+    Object.assign(app.drafts, { 'in.label': r.label || '', 'in.mic': r.mic || '', 'in.stand': r.stand || '', 'in.who': r.who || '' });
+    openSheet({ type: 'input', i: Number(el.dataset.i) });
+  },
+  'input-save'() {
+    const label = draft('in.label').trim();
+    if (!label) { toast('Indique la source'); return; }
+    const list = (Array.isArray(D('tech').inputs) ? D('tech').inputs : []).slice();
+    const row = { label, mic: draft('in.mic').trim(), stand: draft('in.stand'), who: draft('in.who') };
+    if (app.sheet.i == null) list.push({ id: newId('in'), ...row });
+    else list[app.sheet.i] = { ...list[app.sheet.i], ...row };
+    commit([{ op: 'set', path: ['tech', 'inputs'], value: list }]);
+    clearDrafts('in.');
+    closeSheet();
+  },
+  'input-delete'() {
+    const list = (Array.isArray(D('tech').inputs) ? D('tech').inputs : []).slice();
+    const i = app.sheet.i;
+    if (i == null || !list[i]) return;
+    const [gone] = list.splice(i, 1);
+    closeSheet();
+    commitUndoable([{ op: 'set', path: ['tech', 'inputs'], value: list }], `${gone.label} supprimé`);
+  },
+  'tech-notes-save'() {
+    const v = draft('tech.notes', D('tech').notes || '').trim().slice(0, 3000);
+    delete app.drafts['tech.notes'];
+    commit([{ op: 'set', path: ['tech', 'notes'], value: v }]);
+    toast('Infos enregistrées');
+  },
+  'tech-print'() { printTech(); },
   'rep-view'(el) { app.repView = el.dataset.v === 'grid' ? 'grid' : 'list'; LS.set('hy.repView', app.repView); renderView(); },
   'theme'(el) { app.theme = el.dataset.v; LS.set('hy.theme', app.theme); applyTheme(); renderSheet(); },
   'open-activity'() {
@@ -1614,6 +2238,20 @@ const actions = {
   'song-save'() {
     const title = draft('song.title').trim();
     if (!title) { toast('Il faut au moins un titre'); return; }
+    if (app.sheet.idea) {
+      const artist = draft('song.artist').trim();
+      const k = (title + '|' + artist).toLowerCase();
+      if (Object.values(D('songs')).some((x) => (x.title + '|' + x.artist).toLowerCase() === k)) { toast('Il est déjà au répertoire'); return; }
+      const id = newId('i');
+      commit([{ op: 'set', path: ['ideas', id], value: {
+        id, title, artist, cover: safeUrl(draft('song.cover')), duration: parseInt(draft('song.duration'), 10) || null,
+        note: draft('song.note').trim().slice(0, 300), by: app.me, ts: Date.now(), votes: app.me ? { [app.me]: 1 } : {},
+      } }, ...logOps(`a proposé «\u00a0${title}\u00a0»${artist ? ' de ' + artist : ''}`, 'idea-add', 'a proposé des morceaux')]);
+      clearDrafts('song.');
+      closeSheet();
+      toast('Proposé : aux autres de voter');
+      return;
+    }
     const bpmN = parseInt(draft('song.bpm'), 10);
     const artist = draft('song.artist').trim();
     const fields = {
@@ -1654,8 +2292,7 @@ const actions = {
     });
     ops.push(...logOps(`a supprimé « ${s.title} » du répertoire`));
     closeSheet();
-    commit(ops);
-    toast('Morceau supprimé');
+    commitUndoable(ops, 'Morceau supprimé');
   },
   'set-level'(el) {
     if (!app.me) return;
@@ -1687,6 +2324,23 @@ const actions = {
     renderSheet();
     setTimeout(() => { const t = $('#chartText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 40);
   },
+  'parts-edit'() {
+    const song = D('songs')[app.sheet.id];
+    if (!song) return;
+    clearDrafts('parts.');
+    app.partsEdit = song.id;
+    renderSheet();
+  },
+  'parts-cancel'() { clearDrafts('parts.'); app.partsEdit = null; renderSheet(); },
+  'parts-save'() {
+    const song = D('songs')[app.partsEdit];
+    if (!song) return;
+    const parts = {};
+    MEMBERS.forEach((m) => { const v = draft('parts.' + m.id, (song.parts || {})[m.id] || '').trim().slice(0, 140); if (v) parts[m.id] = v; });
+    clearDrafts('parts.');
+    app.partsEdit = null;
+    commit([{ op: 'set', path: ['songs', song.id, 'parts'], value: parts }, ...logOps(`a noté qui fait quoi sur « ${song.title} »`, 'parts:' + song.id)]);
+  },
   'chart-cancel'() { if (app.chartEdit) delete app.drafts['chart.' + app.chartEdit]; app.chartEdit = null; renderSheet(); },
   'chart-save'() {
     const song = D('songs')[app.chartEdit];
@@ -1702,7 +2356,7 @@ const actions = {
     const n = D('notes')[el.dataset.id];
     if (!n) return;
     if (n.by !== app.me && !(await askConfirm(`Supprimer la note de ${memberName(n.by)} ?`))) return;
-    commit([{ op: 'del', path: ['notes', n.id] }]);
+    commitUndoable([{ op: 'del', path: ['notes', n.id] }], 'Note supprimée');
   },
 
   /* Setlists / concerts */
@@ -1715,20 +2369,21 @@ const actions = {
     const g = currentGig();
     if (!g) return;
     clearDrafts('gig.');
-    Object.assign(app.drafts, { 'gig.name': g.name, 'gig.date': g.date || '' });
+    Object.assign(app.drafts, { 'gig.name': g.name, 'gig.date': g.date || '', 'gig.target': g.target ? String(g.target) : '' });
     openSheet({ type: 'gig', id: g.id });
   },
   'gig-save'() {
     const name = draft('gig.name').trim();
     if (!name) { toast('Donne un nom au concert'); return; }
     const date = draft('gig.date');
+    const target = Math.max(0, Math.min(600, parseInt(draft('gig.target'), 10) || 0));
     const id = app.sheet.id;
     if (id) {
-      commit([{ op: 'set', path: ['gigs', id, 'name'], value: name }, { op: 'set', path: ['gigs', id, 'date'], value: date || '' }]);
+      commit([{ op: 'set', path: ['gigs', id, 'name'], value: name }, { op: 'set', path: ['gigs', id, 'date'], value: date || '' }, { op: 'set', path: ['gigs', id, 'target'], value: target }]);
     } else {
       const nid = newId('g');
       setGig(nid);
-      commit([{ op: 'set', path: ['gigs', nid], value: { id: nid, name, date: date || '', songs: [], gear: {}, by: app.me, ts: Date.now() } }, ...logOps(`a créé la setlist « ${name} »`)]);
+      commit([{ op: 'set', path: ['gigs', nid], value: { id: nid, name, date: date || '', target, songs: [], gear: {}, items: {}, by: app.me, ts: Date.now() } }, ...logOps(`a créé la setlist « ${name} »`)]);
       toast('Setlist créée');
     }
     clearDrafts('gig.');
@@ -1738,8 +2393,7 @@ const actions = {
     const g = D('gigs')[app.sheet.id];
     if (!g || !(await askConfirm(`Supprimer le concert « ${g.name} », sa setlist et sa liste de matos ?`))) return;
     closeSheet();
-    setGig(null);
-    commit([{ op: 'del', path: ['gigs', g.id] }]);
+    commitUndoable([{ op: 'del', path: ['gigs', g.id] }], 'Concert supprimé');
   },
   'pick-gig'(el) { setGig(el.dataset.id); renderView(); },
   'pick-songs'() { delete app.drafts['pick.q']; openSheet({ type: 'pick-songs' }); },
@@ -1779,13 +2433,61 @@ const actions = {
   async 'transition-delete'() {
     const g = currentGig();
     if (!g || !(await askConfirm('Supprimer cette transition ?'))) return;
-    commit([{ op: 'del', path: ['gigs', g.id, 'transitions', app.sheet.from + '__' + app.sheet.to] }]);
+    const key = app.sheet.from + '__' + app.sheet.to;
     closeSheet();
+    commitUndoable([{ op: 'del', path: ['gigs', g.id, 'transitions', key] }], 'Transition supprimée');
   },
   'gig-remove-song'(el) {
     const g = currentGig();
     if (!g) return;
-    commit([{ op: 'set', path: ['gigs', g.id, 'songs'], value: (g.songs || []).filter((x) => x !== el.dataset.id) }]);
+    const id = el.dataset.id;
+    const ops = [{ op: 'set', path: ['gigs', g.id, 'songs'], value: (g.songs || []).filter((x) => x !== id) }];
+    if ((g.items || {})[id]) ops.push({ op: 'del', path: ['gigs', g.id, 'items', id] });
+    const name = (D('songs')[id] || (g.items || {})[id] || {}).title || 'Élément';
+    commitUndoable(ops, `${name} retiré de la setlist`);
+  },
+  'new-item'() {
+    if (!currentGig()) return;
+    clearDrafts('item.');
+    openSheet({ type: 'item', id: null });
+  },
+  'edit-item'(el) {
+    const g = currentGig();
+    const it = g && (g.items || {})[el.dataset.id];
+    if (!it) return;
+    clearDrafts('item.');
+    Object.assign(app.drafts, { 'item.title': it.title || '', 'item.dur': String(it.dur || ''), 'item.note': it.note || '' });
+    openSheet({ type: 'item', id: it.id });
+  },
+  'item-preset'(el) { app.drafts['item.title'] = el.dataset.v; renderSheet(); },
+  'item-save'() {
+    const g = currentGig();
+    if (!g) return;
+    const title = draft('item.title').trim();
+    if (!title) { toast('Donne un intitulé'); return; }
+    const fields = { title, dur: Math.max(0, Math.min(60, parseInt(draft('item.dur', '1'), 10) || 0)), note: draft('item.note').trim() };
+    if (app.sheet.id) {
+      commit(Object.entries(fields).map(([k, v]) => ({ op: 'set', path: ['gigs', g.id, 'items', app.sheet.id, k], value: v })));
+    } else {
+      const id = newId('x');
+      commit([
+        { op: 'set', path: ['gigs', g.id, 'items', id], value: { id, ...fields } },
+        { op: 'set', path: ['gigs', g.id, 'songs'], value: [...(g.songs || []), id] },
+      ]);
+      toast('Ajouté en fin de setlist : fais-le glisser à sa place');
+    }
+    clearDrafts('item.');
+    closeSheet();
+  },
+  'item-delete'() {
+    const g = currentGig();
+    const id = app.sheet.id;
+    if (!g || !id) return;
+    closeSheet();
+    commitUndoable([
+      { op: 'set', path: ['gigs', g.id, 'songs'], value: (g.songs || []).filter((x) => x !== id) },
+      { op: 'del', path: ['gigs', g.id, 'items', id] },
+    ], 'Intermède supprimé');
   },
 
   /* Planning */
@@ -1877,7 +2579,7 @@ const actions = {
     const e = D('events')[app.sheet.id];
     if (!e || !(await askConfirm('Supprimer cette date pour tout le monde ?'))) return;
     closeSheet();
-    commit([{ op: 'del', path: ['events', e.id] }]);
+    commitUndoable([{ op: 'del', path: ['events', e.id] }], 'Date supprimée');
   },
   'toggle-past'() { app.showPast = !app.showPast; renderView(); },
   'ics-offline'() { toast('L’ajout à l’agenda marche sur le site en ligne'); },
@@ -1885,9 +2587,9 @@ const actions = {
   /* Mode scène, impression */
   'stage-open'() {
     const g = currentGig();
-    if (!g || !(g.songs || []).some((id) => D('songs')[id])) { toast('La setlist est vide'); return; }
+    if (!g || !gigEntries(g).length) { toast('La setlist est vide'); return; }
     if (metro.playing) metro.stop();
-    app.stage = { gigId: g.id, idx: 0, auto: LS.get('hy.stageAuto', false), lyrics: LS.get('hy.stageLyrics', false) };
+    app.stage = { gigId: g.id, idx: 0, auto: LS.get('hy.stageAuto', false), lyrics: LS.get('hy.stageSheet', true), scroll: LS.get('hy.stageScroll', false), paused: false, zoom: LS.get('hy.stageZoom', 1), locked: false, pos: 0 };
     document.body.style.overflow = 'hidden';
     keepAwake(true);
     renderStage();
@@ -1909,14 +2611,53 @@ const actions = {
     if (app.stage.auto && s && s.bpm && !(metro.playing && metro.songId === s.id)) metro.start(s.id, s.bpm);
     else renderStage();
   },
+  'stage-scroll'() {
+    const st = app.stage;
+    if (!st) return;
+    if (!st.scroll) { st.scroll = true; st.paused = false; st.scrollStart = performance.now() + 600; LS.set('hy.stageScroll', true); }
+    else if (st.paused) { st.paused = false; st.scrollStart = 0; }
+    else { st.scroll = false; LS.set('hy.stageScroll', false); }
+    renderStage();
+  },
+  'scroll-speed'(el) {
+    const s = app.stage && D('songs')[stageIds()[app.stage.idx]];
+    if (!s) return;
+    const v = Math.round(Math.max(0.4, Math.min(2.5, (Number(s.scrollx) || 1) + Number(el.dataset.v) * 0.1)) * 10) / 10;
+    commit([{ op: 'set', path: ['songs', s.id, 'scrollx'], value: v }]);
+  },
+  'stage-zoom'(el) {
+    const st = app.stage;
+    if (!st) return;
+    st.zoom = Math.round(Math.max(0.7, Math.min(1.9, (st.zoom || 1) + Number(el.dataset.v) * 0.1)) * 10) / 10;
+    LS.set('hy.stageZoom', st.zoom);
+    renderStage();
+  },
+  'stage-lock'() { if (app.stage) { app.stage.locked = true; renderStage(); } },
+  'stage-chrono'() {
+    const st = app.stage;
+    if (!st) return;
+    if (st.t0) { st.acc = chronoElapsed(st); st.t0 = 0; } else st.t0 = Date.now();
+    renderStage();
+  },
   'stage-lyrics'() {
     if (!app.stage) return;
     app.stage.lyrics = !app.stage.lyrics;
-    LS.set('hy.stageLyrics', app.stage.lyrics);
+    LS.set('hy.stageSheet', app.stage.lyrics);
     renderStage();
   },
   'print-setlist'() { printSetlist(); },
-  'lyrics-toggle'() { app.showLyrics = !app.showLyrics; LS.set('hy.showLyrics', app.showLyrics); renderSheet(); },
+  'shift'(el) {
+    const song = app.sheet && D('songs')[app.sheet.id];
+    if (!song) return;
+    let v = (Number(song.shift) || 0) + Number(el.dataset.v);
+    if (v > 11) v -= 12;
+    if (v < -11) v += 12;
+    commit([{ op: 'set', path: ['songs', song.id, 'shift'], value: v }]);
+  },
+  'sheet-retry'() {
+    const s = (app.sheet && app.sheet.type === 'song' && D('songs')[app.sheet.id]) || (app.stage && D('songs')[stageIds()[app.stage.idx]]);
+    if (s) { loadSheet(s, true); renderSheet(); renderStage(); }
+  },
   'lyrics-retry'() {
     const s = (app.sheet && app.sheet.type === 'song' && D('songs')[app.sheet.id]) || (app.stage && D('songs')[stageIds()[app.stage.idx]]);
     if (s) { loadLyrics(s, true); renderSheet(); renderStage(); }
@@ -1968,7 +2709,7 @@ const actions = {
     const ops = [{ op: 'del', path: ['gear', x.id] }];
     Object.values(D('gigs')).forEach((g) => { if (g.gear && x.id in g.gear) ops.push({ op: 'del', path: ['gigs', g.id, 'gear', x.id] }); });
     closeSheet();
-    commit(ops);
+    commitUndoable(ops, `${x.name} supprimé de l’inventaire`);
   },
   'pick-gear'() { openSheet({ type: 'pick-gear' }); },
   'toggle-gig-gear'(el) {
@@ -2105,6 +2846,7 @@ document.addEventListener('pointercancel', dragEnd);
 /* ================= Écouteurs ================= */
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-drag-handle]')) return;
+  if (e.target.closest('a[href]')) return; // un vrai lien (appel, e-mail, écoute) n'ouvre pas la ligne autour
   if (drag.justEnded && Date.now() - drag.justEnded < 350) return;
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
@@ -2146,6 +2888,7 @@ function onField(e) {
   if (t.dataset.draft === 'song.search' && e.type === 'input') { querySuggest(t.value); renderSheet(); return; }
   if (t.dataset.bind === 'query') { app.query = t.value; renderView(); }
   if (t.dataset.rerender !== undefined) renderSheet();
+  if (t.dataset.commit && e.type === 'change' && actions[t.dataset.commit]) actions[t.dataset.commit](t);
 }
 document.addEventListener('input', onField);
 // Une pochette qui ne charge pas laisse place aux initiales.
@@ -2155,16 +2898,33 @@ document.addEventListener('change', onField);
 // Mode scène : glisser à gauche ou à droite pour changer de morceau.
 const swipe = { x: null };
 $('#stage').addEventListener('pointerdown', (e) => {
-  if (e.target.closest('button')) { swipe.x = null; return; }
+  const hold = e.target.closest('[data-hold="unlock"]');
+  if (hold) {
+    hold.classList.add('holding');
+    clearTimeout(swipe.hold);
+    swipe.hold = setTimeout(() => { if (app.stage) { app.stage.locked = false; renderStage(); } }, 800);
+    return;
+  }
+  if ((app.stage && app.stage.locked) || e.target.closest('button')) { swipe.x = null; return; }
   Object.assign(swipe, { x: e.clientX, y: e.clientY, t: Date.now() });
 });
+const endHold = () => { clearTimeout(swipe.hold); document.querySelectorAll('.holding').forEach((b) => b.classList.remove('holding')); };
 $('#stage').addEventListener('pointerup', (e) => {
+  endHold();
   if (swipe.x == null) return;
   const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
   swipe.x = null;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - swipe.t < 900) stageGo(dx < 0 ? 1 : -1);
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - swipe.t < 900) { stageGo(dx < 0 ? 1 : -1); return; }
+  // Un simple tap sur la grille met le défilement en pause (ou le relance).
+  const st = app.stage;
+  if (st && st.scroll && Math.abs(dx) < 8 && Math.abs(dy) < 8 && e.target.closest('.st-body')) {
+    st.paused = !st.paused;
+    if (!st.paused) st.scrollStart = 0;
+    renderStage();
+  }
 });
-$('#stage').addEventListener('pointercancel', () => { swipe.x = null; });
+$('#stage').addEventListener('pointercancel', () => { swipe.x = null; endHold(); });
+$('#stage').addEventListener('pointerleave', endHold);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && app.stage) keepAwake(true); });
 
 /* ================= Démarrage ================= */

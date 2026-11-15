@@ -1,6 +1,6 @@
 [build]
   # Les fichiers sont à plat dans le dépôt : on les range dans les bons dossiers au moment de la mise en ligne.
-  command = "mkdir -p public netlify/functions && cp index.html app.js style.css shared.mjs public/ && for f in state search cover ics lyrics; do if [ -f $f.mjs ]; then cp $f.mjs netlify/functions/; fi; done"
+  command = "mkdir -p public netlify/functions && cp index.html app.js style.css shared.mjs public/ && for f in state search cover ics lyrics chords; do if [ -f $f.mjs ]; then cp $f.mjs netlify/functions/; fi; done"
   publish = "public"
 
 [functions]

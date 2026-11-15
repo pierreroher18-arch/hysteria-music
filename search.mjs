@@ -10,7 +10,7 @@ const json = (body, status = 200, cache = 'public, max-age=3600') =>
 const https = (u) => (typeof u === 'string' && u.startsWith('https://') ? u : '');
 
 async function fromDeezer(q, limit) {
-  const r = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=${limit}`, { signal: AbortSignal.timeout(4000) });
+  const r = await fetch(`https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=${Math.min(50, limit * 2)}`, { signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw new Error('deezer ' + r.status);
   const j = await r.json();
   if (!j || !Array.isArray(j.data)) throw new Error('deezer shape');
@@ -24,7 +24,7 @@ async function fromDeezer(q, limit) {
 }
 
 async function fromItunes(q, limit) {
-  const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=${limit}&country=FR`, { signal: AbortSignal.timeout(4000) });
+  const r = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(q)}&entity=song&limit=${Math.min(50, limit * 2)}&country=FR`, { signal: AbortSignal.timeout(4000) });
   if (!r.ok) throw new Error('itunes ' + r.status);
   const j = await r.json();
   return (j.results || []).map((t) => ({
@@ -42,12 +42,19 @@ export default async (req) => {
 
   const url = new URL(req.url);
   const q = (url.searchParams.get('q') || '').trim().slice(0, 100);
-  const limit = Math.min(10, Math.max(1, Number(url.searchParams.get('limit')) || 6));
+  const limit = Math.min(25, Math.max(1, Number(url.searchParams.get('limit')) || 6));
   if (q.length < 2) return json({ results: [] });
 
   for (const source of [fromDeezer, fromItunes]) {
     try {
-      const results = await source(q, limit);
+      // On enlève les doublons (même titre, même artiste) venus des compilations et rééditions.
+      const seen = new Set();
+      const results = (await source(q, limit)).filter((x) => {
+        const k = (x.title + '|' + x.artist).toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      }).slice(0, limit);
       if (results.length) return json({ results });
     } catch {
       // on passe à la source suivante
