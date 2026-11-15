@@ -41,12 +41,6 @@ async function readState(store) {
 }
 
 export default async (req) => {
-  // Code d'accès optionnel : définir la variable BAND_CODE dans Netlify.
-  const code = process.env.BAND_CODE;
-  if (code && req.headers.get('x-band-code') !== code) {
-    return json({ error: 'code' }, 401);
-  }
-
   const store = getStore({ name: 'hysteria', consistency: 'strong' });
 
   if (req.method === 'GET') {

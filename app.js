@@ -213,7 +213,6 @@ const app = {
   pending: LS.get('hy.pending', []),
   view: null,
   me: LS.get('hy.me', null),
-  code: LS.get('hy.code', ''),
   tab: LS.get('hy.tab', 'repertoire'),
   repSort: 'az',
   query: '',
@@ -224,7 +223,7 @@ const app = {
   showPast: false,
   sheet: null,
   drafts: {},
-  mode: 'boot', // boot | online | offline | local | locked
+  mode: 'boot', // boot | online | offline | local
   sending: false,
   lastSync: 0,
   dragging: false,
@@ -261,10 +260,9 @@ function persist() {
 /* ================= Synchro ================= */
 const API = '/api/state';
 function headers() {
-  const h = { 'content-type': 'application/json' };
-  if (app.code) h['x-band-code'] = app.code;
-  return h;
+  return { 'content-type': 'application/json' };
 }
+try { localStorage.removeItem('hy.code'); } catch {}
 function setMode(m) {
   if (app.mode === m) return;
   app.mode = m;
@@ -273,11 +271,10 @@ function setMode(m) {
 }
 
 async function pull() {
-  if (app.mode === 'local' || app.mode === 'locked' || app.sending || app.pending.length) return;
+  if (app.mode === 'local' || app.sending || app.pending.length) return;
   try {
     const q = app.base && app.rev ? '?rev=' + encodeURIComponent(app.rev) : '';
     const r = await fetch(API + q, { headers: headers(), cache: 'no-store' });
-    if (r.status === 401) return lock(!!app.code);
     const ct = r.headers.get('content-type') || '';
     if (!ct.includes('application/json')) return goLocal();
     const res = await r.json();
@@ -293,13 +290,12 @@ async function pull() {
 }
 
 async function push() {
-  if (app.mode === 'local' || app.mode === 'locked' || app.sending || !app.pending.length) return;
+  if (app.mode === 'local' || app.sending || !app.pending.length) return;
   app.sending = true;
   renderHeader();
   const batch = app.pending.slice();
   try {
     const r = await fetch(API, { method: 'POST', headers: headers(), body: JSON.stringify({ ops: batch }) });
-    if (r.status === 401) { app.sending = false; return lock(true); }
     const res = await r.json();
     if (!r.ok) throw new Error(res.error || r.status);
     app.pending.splice(0, batch.length);
@@ -347,11 +343,6 @@ function goLocal() {
   app.view = clone(app.base);
   persist();
   renderAll();
-}
-
-function lock(wrong) {
-  app.mode = 'locked';
-  renderOverlay(wrong);
 }
 
 /* ================= Accès aux données ================= */
@@ -1988,23 +1979,8 @@ function applyTheme() {
 if (darkMQ && darkMQ.addEventListener) darkMQ.addEventListener('change', applyTheme);
 
 /* ----- Écrans d'accueil ----- */
-function renderOverlay(wrong) {
+function renderOverlay() {
   const el = $('#overlay');
-  if (app.mode === 'locked') {
-    el.hidden = false;
-    el.innerHTML = `
-      <div class="overlay-inner">
-        <h1 class="wordmark">Hysteria</h1>
-        <p class="who-q">Code du groupe</p>
-        <div class="who-list">
-          <input class="input" id="codeInput" type="password" autocomplete="current-password" placeholder="Le code partagé entre vous quatre" data-enter="code-submit">
-          <button class="btn primary" data-act="code-submit">Entrer</button>
-          ${wrong ? '<p class="err">Ce code ne marche pas.</p>' : ''}
-        </div>
-      </div>`;
-    setTimeout(() => { const i = $('#codeInput'); if (i) i.focus(); }, 50);
-    return;
-  }
   if (!app.me) {
     el.hidden = false;
     el.innerHTML = `
@@ -2753,16 +2729,6 @@ const actions = {
     closeSheet();
     renderAll();
     toast('C’est reparti de zéro');
-  },
-  'code-submit'() {
-    const i = $('#codeInput');
-    const v = i ? i.value.trim() : '';
-    if (!v) return;
-    app.code = v;
-    LS.set('hy.code', v);
-    app.mode = 'boot';
-    renderOverlay();
-    pull().then(() => { if (app.mode !== 'locked') { renderAll(); push(); } });
   },
 };
 

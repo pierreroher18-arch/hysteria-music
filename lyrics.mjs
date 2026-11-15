@@ -31,9 +31,6 @@ function best(list, artist, title) {
 }
 
 export default async (req) => {
-  const code = process.env.BAND_CODE;
-  if (code && req.headers.get('x-band-code') !== code) return json({ error: 'code' }, 401, 'no-store');
-
   const p = new URL(req.url).searchParams;
   const title = (p.get('title') || '').trim().slice(0, 150);
   const artist = (p.get('artist') || '').trim().slice(0, 150);

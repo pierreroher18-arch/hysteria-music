@@ -37,9 +37,6 @@ async function fromItunes(q, limit) {
 }
 
 export default async (req) => {
-  const code = process.env.BAND_CODE;
-  if (code && req.headers.get('x-band-code') !== code) return json({ error: 'code' }, 401, 'no-store');
-
   const url = new URL(req.url);
   const q = (url.searchParams.get('q') || '').trim().slice(0, 100);
   const limit = Math.min(25, Math.max(1, Number(url.searchParams.get('limit')) || 6));
