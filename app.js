@@ -1630,6 +1630,13 @@ function sheetSong(s) {
     </div>
 
     <div class="song-body">
+      <div class="sb-chords" id="chordsSec">
+        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">${song.sheet ? 'Modifier' : 'Placer nos accords'}</button></span>`}</h3>
+        ${songSheetBlock(song)}
+        <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
+      </div>
+
+      <aside class="sb-side">
       <div class="sb-tempo">
         <div class="tempo-box">
           <div class="tempo-row">
@@ -1653,13 +1660,6 @@ function sheetSong(s) {
             : '<p class="empty-note" style="margin:0">Pas de tempo : ajoute-le dans « Modifier ».</p>'}
         </div>
       </div>
-
-      <div class="sb-chords" id="chordsSec">
-        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">${song.sheet ? 'Modifier' : 'Placer nos accords'}</button></span>`}</h3>
-        ${songSheetBlock(song)}
-        <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
-      </div>
-
       <div class="sb-rest">
         <h3 class="block-title">Ton niveau${app.me ? '' : ' (choisis ton profil)'}</h3>
         <div class="levels" role="group" aria-label="Ton niveau">
@@ -1691,6 +1691,7 @@ function sheetSong(s) {
           <div><button class="btn" data-act="note-add">Ajouter la note</button></div>
         </div>
       </div>
+      </aside>
     </div>`;
 }
 

@@ -1487,7 +1487,11 @@ code { font: 600 0.92em ui-monospace, Menlo, monospace; padding: 1px 4px; border
 .sheet-wrap.as-page .song-hero { padding-top: calc(22px + env(safe-area-inset-top, 0px)); }
 @keyframes pagein { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 .hero-in, .song-body { max-width: var(--maxw); margin: 0 auto; }
-.song-body { padding-top: 20px; }
+.song-body { padding-top: 20px; display: flex; flex-direction: column; }
+.sb-side { display: contents; }
+.sb-tempo { order: 1; }
+.sb-chords { order: 2; }
+.sb-rest { order: 3; }
 .cp-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 10px; padding: 8px 0; background: var(--paper); font-size: 14px; color: var(--dust); }
 @media (min-width: 1000px) {
   .sheet-wrap.as-page .song-hero { padding-bottom: 30px; }
@@ -1498,11 +1502,20 @@ code { font: 600 0.92em ui-monospace, Menlo, monospace; padding: 1px 4px; border
   .sheet-wrap.as-page .hero-titles { grid-area: titles; margin-bottom: 14px; }
   .sheet-wrap.as-page .row-actions { grid-area: actions; }
   .sheet-wrap.as-page .song-hero .sh-title { font-size: 54px; }
-  .sheet-wrap.as-page .song-body { display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-areas: "chords tempo" "chords rest"; column-gap: 48px; align-items: start; padding-top: 28px; }
-  .sheet-wrap.as-page .sb-tempo { grid-area: tempo; }
-  .sheet-wrap.as-page .sb-chords { grid-area: chords; }
+  /* Grand écran : accords à gauche, tempo, niveaux et notes à droite, qui restent visibles en faisant défiler. */
+  .sheet-wrap.as-page .song-body { display: grid; grid-template-columns: minmax(0, 1fr) 380px; column-gap: 48px; align-items: start; padding-top: 28px; }
+  .sheet-wrap.as-page .sb-chords { grid-column: 1; grid-row: 1; }
   .sheet-wrap.as-page .sb-chords > .block-title:first-child { margin-top: 0; }
-  .sheet-wrap.as-page .sb-rest { grid-area: rest; }
+  .sheet-wrap.as-page .sb-side {
+    display: block; grid-column: 2; grid-row: 1;
+    position: sticky; top: 20px;
+    max-height: calc(100vh - var(--nav-h) - 64px); overflow-y: auto;
+    margin-right: -10px; padding-right: 10px; scrollbar-width: thin;
+  }
+  .sheet-wrap.as-page .sb-side .tempo-box { margin-top: 0; }
+  .sheet-wrap.as-page .sb-side .block-title { margin: 20px 0 8px; }
+  .sheet-wrap.as-page .sb-side .band-levels .bl { padding-top: 6px; padding-bottom: 6px; }
+  .sheet-wrap.as-page .sb-side textarea.input { min-height: 64px; height: 64px; }
   .sheet-wrap.as-page .chordsheet { font-size: clamp(12px, calc((min(100vw, 1180px) - 560px) / (var(--cols, 48) * 0.6)), 17px); }
   .sheet-wrap.as-page .cw .tx { font-size: 18px; }
   .sheet-wrap.as-page .cw .ch { font-size: 15px; }
