@@ -25,8 +25,10 @@ function best(list, artist, title) {
   if (!Array.isArray(list)) return null;
   const a = norm(artist), ti = norm(title);
   const ok = list.filter(usable);
-  return ok.find((t) => norm(t.artistName).includes(a.split(' ')[0] || a) && norm(t.trackName).startsWith(ti))
-    || ok.find((t) => norm(t.artistName).includes(a.split(' ')[0] || a))
+  const art = (t) => norm(t.artistName).includes(a.split(' ')[0] || a);
+  const same = ok.filter((t) => art(t) && norm(t.trackName).startsWith(ti));
+  return same.find((t) => t.syncedLyrics) || same[0]
+    || ok.find((t) => art(t) && t.syncedLyrics) || ok.find(art)
     || null;
 }
 
@@ -51,6 +53,8 @@ export default async (req) => {
       found: true,
       instrumental: !!t.instrumental,
       lyrics: t.instrumental ? '' : String(t.plainLyrics || '').slice(0, 20000),
+      // Paroles minutées (format LRC « [01:23.45] ligne ») : servent à allumer la ligne en cours.
+      synced: t.instrumental ? '' : String(t.syncedLyrics || '').slice(0, 30000),
       track: t.trackName || title,
       artist: t.artistName || artist,
       source: 'LRCLIB',

@@ -65,23 +65,12 @@ function loadLyrics(s, retry) {
   fetch('/api/lyrics?' + q.toString(), { headers: headers() })
     .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
     .then(({ ok, j }) => {
-      if (j && j.found) app.lyrics[k] = { state: 'ok', text: j.lyrics || '', instrumental: !!j.instrumental };
+      if (j && j.found) app.lyrics[k] = { state: 'ok', text: j.lyrics || '', synced: j.synced || '', instrumental: !!j.instrumental };
       else app.lyrics[k] = { state: ok ? 'none' : 'error' };
     })
     .catch(() => { app.lyrics[k] = { state: 'error' }; })
     .finally(() => { renderSheet(); renderStage(); });
 }
-function lyricsBody(s, cls = 'lyrics') {
-  if (app.mode === 'local') return '<p class="empty-note">Disponible sur le site en ligne.</p>';
-  loadLyrics(s);
-  const l = app.lyrics[lyricsKey(s)] || { state: 'loading' };
-  if (l.state === 'loading') return '<p class="empty-note">Chargement…</p>';
-  if (l.state === 'error') return '<p class="empty-note">Paroles indisponibles. <button class="link-btn" data-act="lyrics-retry">Réessayer</button></p>';
-  if (l.state === 'none') return '<p class="empty-note">Paroles introuvables.</p>';
-  if (l.instrumental || !l.text) return '<p class="empty-note">Instrumental.</p>';
-  return `<pre class="${cls}">${esc(l.text)}</pre>`;
-}
-
 // Accords + paroles (version « Chords » la mieux notée d'Ultimate Guitar, via /api/chords).
 function loadSheet(s, retry) {
   if (!s || app.mode === 'local') return;
@@ -113,16 +102,6 @@ function frSection(label) {
   const hit = SECTION_FR.find(([en]) => low.startsWith(en));
   return hit ? hit[1] + label.slice(hit[0].length) : label;
 }
-function chordSheetHtml(sh, shift, cls) {
-  let cols = 0;
-  const body = sh.content.replace(/\[\/?tab\]/g, '').split('\n').map((line) => {
-    const sec = line.trim().match(/^\[([^\[\]]+)\]$/);
-    if (sec) return `<span class="cs-sec">${esc(frSection(sec[1]))}</span>`;
-    cols = Math.max(cols, line.replace(/\[\/?ch\]/g, '').length);
-    return esc(line).replace(/\[ch\](.*?)\[\/ch\]/g, (_, c) => `<b class="ch">${transposeChord(c, shift)}</b>`);
-  }).join('\n');
-  return `<pre class="${cls}" style="--cols:${Math.max(24, Math.min(cols, 64))}">${body}</pre>`;
-}
 const shiftLabel = (s) => { const n = Number(s.shift) || 0; return n ? (n > 0 ? '+' : '−') + Math.abs(n) : 'Originale'; };
 
 /* ----- Nos accords, posés à la main au-dessus des mots ----- */
@@ -149,18 +128,28 @@ function cpParse(text) {
 }
 const cpSerialize = (lines) => lines.map((l) => (l.sec != null ? '# ' + l.sec : l.chunks.map((c) => (c.ch ? `[${c.ch}]` : '') + c.tx).join('').replace(/\s+$/, ''))).join('\n');
 const cpShift = (lines, n) => lines.map((l) => (l.sec != null ? l : { chunks: l.chunks.map((c) => ({ ...c, ch: c.ch ? transposeChord(c.ch, n) : '' })) }));
+const lineText = (l) => (l && l.chunks ? l.chunks.map((c) => c.tx).join('').trim() : '');
+const normTxt = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
+// Ligne de tablature (« e|---3---| ») : affichée telle quelle, en chasse fixe.
+const isTabLine = (t) => /^[A-Ga-g]?[#b]?\s?\|.*-{3,}/.test(t) || (/-{4,}/.test(t) && /^[-\d|hpbrx\/\\~()\s.^*]+$/.test(t));
+// Une ligne : chaque mot avec son accord au-dessus.
+function cpLine(l, li, shift, o = {}) {
+  if (!l.chunks.length) return '<div class="cp-gap"></div>';
+  const has = l.chunks.some((c) => c.ch);
+  if (!has && isTabLine(lineText(l))) return `<pre class="cp-tab" data-li="${li}">${esc(l.chunks.map((c) => c.tx).join(''))}</pre>`;
+  const onlyCh = l.chunks.every((c) => !c.tx.trim());
+  const cells = l.chunks.map((c, ci) => {
+    const name = c.ch ? transposeChord(c.ch, shift) : '';
+    const ch = name && o.pop ? `<button class="ch" data-act="chord-pop" data-v="${esc(name)}">${esc(name)}</button>` : `<b class="ch">${name ? esc(name) : ' '}</b>`;
+    const inner = `${ch}<span class="tx">${esc(c.tx) || ' '}</span>`;
+    if (!o.edit) return `<span class="cw">${inner}</span>`;
+    return `<button class="cw${o.sel === li + ':' + ci ? ' sel' : ''}" data-act="cp-pick" data-l="${li}" data-c="${ci}">${inner}</button>`;
+  }).join('');
+  const mark = o.marking ? ` data-act="mark-add" data-li="${li}" title="Ajouter un repère"` : '';
+  return `<div class="cp-line${has ? '' : ' plain'}${onlyCh ? ' only' : ''}${o.marking ? ' markable' : ''}" data-li="${li}"${mark}>${cells}</div>`;
+}
 function cpHtml(lines, shift, opts = {}) {
-  return `<div class="cp${opts.stage ? ' on-stage' : ''}${opts.edit ? ' edit' : ''}">${lines.map((l, li) => {
-    if (l.sec != null) return `<div class="cp-sec">${esc(frSection(l.sec))}</div>`;
-    if (!l.chunks.length) return '<div class="cp-gap"></div>';
-    const has = l.chunks.some((c) => c.ch);
-    const onlyCh = l.chunks.every((c) => !c.tx.trim());
-    return `<div class="cp-line${has ? '' : ' plain'}${onlyCh ? ' only' : ''}">${l.chunks.map((c, ci) => {
-      const inner = `<b class="ch">${c.ch ? esc(transposeChord(c.ch, shift)) : '\u00a0'}</b><span class="tx">${esc(c.tx) || '\u00a0'}</span>`;
-      if (!opts.edit) return `<span class="cw">${inner}</span>`;
-      return `<button class="cw${opts.sel === li + ':' + ci ? ' sel' : ''}" data-act="cp-pick" data-l="${li}" data-c="${ci}">${inner}</button>`;
-    }).join('')}</div>`;
-  }).join('')}</div>`;
+  return `<div class="cp${opts.stage ? ' on-stage' : ''}${opts.edit ? ' edit' : ''}">${lines.map((l, li) => (l.sec != null ? `<div class="cp-sec"><span class="sec-chip">${esc(frSection(l.sec))}</span></div>` : cpLine(l, li, shift, opts))).join('')}</div>`;
 }
 // Grille Ultimate Guitar (accords sur une ligne, paroles en dessous) vers notre format.
 const isChLine = (l) => /\[ch\]/.test(l) && !l.replace(/\[ch\][^\[]*\[\/ch\]/g, '').replace(/[\s|\-x×\d()\/.:]/g, '').length;
@@ -205,74 +194,405 @@ function ugToCP(content) {
 }
 const CP_ROOTS = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 const CP_QUALS = [['', 'majeur'], ['m', 'm'], ['7', '7'], ['m7', 'm7'], ['maj7', 'maj7'], ['sus2', 'sus2'], ['sus4', 'sus4'], ['add9', 'add9'], ['5', '5'], ['6', '6'], ['9', '9'], ['dim', 'dim']];
+
+/* ----- Parties du morceau (Intro, Couplet, Refrain…) et leurs couleurs ----- */
+const SEC_COLORS = { ardoise: 'Ardoise', bleu: 'Bleu', violet: 'Violet', rose: 'Rose', ambre: 'Ambre', vert: 'Vert', sarcelle: 'Sarcelle', sable: 'Sable' };
+const SEC_TYPES = [
+  ['pre-refrain', 'Pré-refrain', 'violet'], ['post-refrain', 'Post-refrain', 'violet'], ['refrain', 'Refrain', 'rose'], ['couplet', 'Couplet', 'bleu'],
+  ['intro', 'Intro', 'ardoise'], ['outro', 'Outro', 'ardoise'], ['pont', 'Pont', 'ambre'], ['solo', 'Solo', 'vert'], ['riff', 'Riff', 'vert'],
+  ['interlude', 'Interlude', 'sarcelle'], ['instrumental', 'Instrumental', 'sarcelle'], ['break', 'Break', 'ambre'], ['fin', 'Fin', 'ardoise'], ['coda', 'Coda', 'ardoise'],
+];
+const SEC_ADD = ['Intro', 'Couplet', 'Pré-refrain', 'Refrain', 'Pont', 'Solo', 'Riff', 'Interlude', 'Break', 'Outro'];
+function secType(label) {
+  const n = frSection(String(label || '')).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z-]+/g, ' ').replace(/\bpre refrain/, 'pre-refrain').replace(/\bpost refrain/, 'post-refrain').trim();
+  const t = SEC_TYPES.find(([k]) => n.startsWith(k));
+  return t ? t[0] : (n.split(' ')[0] || 'partie').slice(0, 30);
+}
+function secColor(song, label) {
+  const k = secType(label);
+  const c = ((song && song.secColors) || {})[k];
+  if (SEC_COLORS[c]) return c;
+  const t = SEC_TYPES.find(([key]) => key === k);
+  return t ? t[2] : 'sable';
+}
+// Découpe en parties : { label, head (ligne-titre, -1 si le début n'a pas de titre), start, end }.
+function cpParts(lines) {
+  const parts = [];
+  lines.forEach((l, i) => {
+    if (l.sec != null) { parts.push({ label: l.sec, head: i, start: i + 1, end: i + 1 }); return; }
+    let cur = parts[parts.length - 1];
+    if (!cur) { cur = { label: '', head: -1, start: i, end: i }; parts.push(cur); }
+    cur.end = i + 1;
+  });
+  return parts.filter((p) => p.head >= 0 || lines.slice(p.start, p.end).some((l) => l.chunks && l.chunks.length));
+}
+
+/* ----- Grille de mesures : les accords de chaque ligne, sans les paroles ----- */
+function gridHtml(lines, shift) {
+  const rows = [];
+  lines.forEach((l) => {
+    if (!l.chunks) return;
+    const chs = l.chunks.map((c) => c.ch).filter(Boolean).map((c) => transposeChord(c, shift));
+    if (!chs.length) return;
+    const key = chs.join(' ');
+    const last = rows[rows.length - 1];
+    if (last && last.key === key) last.n++; else rows.push({ key, chs, n: 1 });
+  });
+  if (!rows.length) return '<p class="gr-empty">Pas d’accords notés</p>';
+  return rows.map((r) => `<div class="gr-row">${r.chs.map((c, i) => `<span class="gr-cell${i === r.chs.length - 1 ? ' end' : ''}">${esc(c)}</span>`).join('')}${r.n > 1 ? `<span class="gr-x">×${r.n}</span>` : ''}</div>`).join('');
+}
+
+/* ----- Repères notés par le groupe sur une ligne (« break ici », « on coupe 2 temps ») ----- */
+function marksMap(song, lines) {
+  const out = {};
+  const ok = (i) => lines[i] && lines[i].chunks && lines[i].chunks.length;
+  Object.entries(song.marks || {}).forEach(([id, m]) => {
+    if (!m || !m.text) return;
+    let at = Number(m.at) || 0;
+    const same = (i) => ok(i) && normTxt(lineText(lines[i])) === m.snap;
+    if (!same(at)) {
+      const f = lines.findIndex((l, i) => same(i));
+      if (f >= 0) at = f;
+      else {
+        at = Math.min(Math.max(0, at), lines.length - 1);
+        while (at < lines.length - 1 && !ok(at)) at++;
+      }
+    }
+    (out[at] = out[at] || []).push({ id, ...m });
+  });
+  Object.values(out).forEach((l) => l.sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+  return out;
+}
+function marksHtml(list, o, li) {
+  const form = !o.stage && app.markEdit && app.markEdit.li === li && app.sheet && app.sheet.id === o.song.id;
+  if (!list && !form) return '';
+  const tag = (m) => {
+    const inner = `<b>${esc(memberName(m.by) || '')}</b>${esc(m.text)}`;
+    return o.marking ? `<button class="cp-mark" data-act="mark-edit" data-id="${esc(m.id)}" data-li="${li}">${inner}</button>` : `<span class="cp-mark">${inner}</span>`;
+  };
+  return `${list ? `<div class="cp-marks">${list.map(tag).join('')}</div>` : ''}${form ? `
+    <div class="mk-form">
+      <input class="input" id="mkText" data-draft="mk.text" data-enter="mark-save" maxlength="80" placeholder="Ex. break ici, on coupe 2 temps" value="${esc(draft('mk.text'))}" aria-label="Repère">
+      <button class="btn small primary" data-act="mark-save">OK</button>
+      ${app.markEdit.id ? '<button class="btn small ghost danger" data-act="mark-del">Supprimer</button>' : ''}
+      <button class="btn small ghost" data-act="mark-cancel">Annuler</button>
+    </div>` : ''}`;
+}
+
+// Les parties, chacune avec sa couleur. o : { stage, edit, sel, view, pop, marking, song }.
+function partsHtml(song, lines, shift, o) {
+  const marks = o.edit ? {} : marksMap(song, lines);
+  return cpParts(lines).map((p, n) => {
+    const col = p.head >= 0 ? secColor(song, p.label) : '';
+    const name = p.head >= 0 ? frSection(p.label) : (o.edit ? 'Début' : '');
+    const tools = o.edit ? `<button class="link-btn pt-btn" data-act="part-text" data-i="${n}">${ICON.edit}Paroles</button>` : '';
+    const head = name ? `<div class="cp-sec"><span class="sec-chip">${esc(name)}</span>${tools}</div>` : '';
+    const range = lines.slice(p.start, p.end);
+    let body;
+    if (o.edit && app.cpEdit.part === n) {
+      body = `<div class="pt-edit">
+        <textarea class="input chart-input pt-text" id="cpPart" data-draft="cp.part" spellcheck="false" rows="${Math.min(14, Math.max(3, draft('cp.part').split('\n').length + 1))}" placeholder="[Am]Les paroles avec [G]leurs accords">${esc(draft('cp.part'))}</textarea>
+        <div class="pt-actions"><span class="hint"><code>[Am]mot</code> pour un accord</span><button class="btn small ghost" data-act="part-text-cancel">Annuler</button><button class="btn small primary" data-act="part-text-ok">OK</button></div>
+      </div>`;
+    } else if (o.view === 'grid') {
+      const here = Object.entries(marks).filter(([li]) => li >= p.start && li < p.end).flatMap(([, l]) => l);
+      body = gridHtml(range, shift) + (here.length ? marksHtml(here, { ...o, marking: false }, -1) : '');
+    } else {
+      body = range.map((l, k) => cpLine(l, p.start + k, shift, o) + marksHtml(marks[p.start + k], o, p.start + k)).join('');
+    }
+    return `<section class="cp-part${col ? ' c' : ''}" data-part="${n}"${col ? ` style="--sc: var(--sc-${col})"` : ''}>${head}${body}</section>`;
+  }).join('');
+}
+// Frise : les parties dans l'ordre, en couleur. Toucher une partie y emmène.
+function friseHtml(song, lines) {
+  const parts = cpParts(lines).map((p, n) => ({ ...p, n })).filter((p) => p.head >= 0);
+  if (parts.length < 2) return '';
+  return `<nav class="frise" aria-label="Structure du morceau">${parts.map((p) => `<button class="fr-b" data-act="part-jump" data-i="${p.n}" style="--sc: var(--sc-${secColor(song, p.label)})">${esc(frSection(p.label))}</button>`).join('')}</nav>`;
+}
+
+/* ----- Diagrammes d'accords (guitare) ----- */
+const CHORD_OPEN = {
+  C: 'x32010', Cmaj7: 'x32000', C7: 'x32310', Cadd9: 'x32030', Csus2: 'x30013', Csus4: 'x33011',
+  D: 'xx0232', Dm: 'xx0231', D7: 'xx0212', Dm7: 'xx0211', Dmaj7: 'xx0222', Dsus2: 'xx0230', Dsus4: 'xx0233',
+  E: '022100', Em: '022000', E7: '020100', Em7: '022030', Emaj7: '021100', Esus4: '022200', E5: '022xxx',
+  F: '133211', Fmaj7: 'xx3210',
+  G: '320003', G7: '320001', Gmaj7: '320002', Gsus4: '330013',
+  A: 'x02220', Am: 'x02210', A7: 'x02020', Am7: 'x02010', Amaj7: 'x02120', Asus2: 'x02200', Asus4: 'x02230', A7sus4: 'x02030', A5: 'x022xx',
+  B7: 'x21202',
+};
+// Formes mobiles : fondamentale sur la corde de mi grave (E) ou de la (A). null = corde muette.
+const SHAPE_E = { '': [0, 2, 2, 1, 0, 0], m: [0, 2, 2, 0, 0, 0], 7: [0, 2, 0, 1, 0, 0], m7: [0, 2, 0, 0, 0, 0], maj7: [0, null, 1, 1, 0, null], sus4: [0, 2, 2, 2, 0, 0], 5: [0, 2, 2, null, null, null], 9: [0, null, 0, 1, 0, 2], '7sus4': [0, 2, 0, 2, 0, 0] };
+const SHAPE_A = { '': [null, 0, 2, 2, 2, 0], m: [null, 0, 2, 2, 1, 0], 7: [null, 0, 2, 0, 2, 0], m7: [null, 0, 2, 0, 1, 0], maj7: [null, 0, 2, 1, 2, 0], sus2: [null, 0, 2, 2, 0, 0], sus4: [null, 0, 2, 2, 3, 0], 5: [null, 0, 2, 2, null, null], 6: [null, 0, 2, 2, 2, 2], m6: [null, 0, 2, 2, 1, 2], add9: [null, 0, 2, 4, 2, 0], 9: [null, 0, -1, 0, 0, 0], dim: [null, 0, 1, 2, 1, null], m7b5: [null, 0, 1, 0, 1, null], '7sus4': [null, 0, 2, 0, 3, 0], aug: [null, 0, 3, 2, 2, 1] };
+const QUAL_ALIAS = { min: 'm', mi: 'm', '-': 'm', M: '', maj: '', M7: 'maj7', Maj7: 'maj7', 'Δ': 'maj7', 'Δ7': 'maj7', '7M': 'maj7', min7: 'm7', mi7: 'm7', '-7': 'm7', sus: 'sus4', 4: 'sus4', 2: 'sus2', add2: 'add9', 'ø': 'm7b5', 'ø7': 'm7b5', 'm7-5': 'm7b5', o: 'dim', '°': 'dim', dim7: 'dim', '+': 'aug', sus7: '7sus4', '7(4)': '7sus4', '7sus': '7sus4' };
+function chordShape(name) {
+  const m = String(name || '').match(/^([A-G])([#b♯♭]?)([^/]*)/);
+  if (!m) return null;
+  const v = (NOTE_V[m[1]] + (m[2] === '#' || m[2] === '♯' ? 1 : m[2] ? -1 : 0) + 12) % 12;
+  let q = m[3].trim();
+  if (q in QUAL_ALIAS) q = QUAL_ALIAS[q];
+  const root = SHARPS[v];
+  const simple = (x) => (/^m(?!aj)/.test(x) ? (x.includes('7') ? 'm7' : 'm') : x.includes('maj7') ? 'maj7' : x.includes('7') ? '7' : '');
+  const tryQ = [q, simple(q)];
+  for (const qq of tryQ) {
+    const open = CHORD_OPEN[root + qq];
+    if (open) return { frets: [...open].map((c) => (c === 'x' ? -1 : Number(c))), simplified: qq !== q };
+    const cands = [[SHAPE_E[qq], (v - 4 + 12) % 12], [SHAPE_A[qq], (v - 9 + 12) % 12]]
+      .filter(([sh, r]) => sh && sh.every((o) => o == null || r + o >= 0))
+      .map(([sh, r]) => sh.map((o) => (o == null ? -1 : r + o)))
+      .sort((a, b) => Math.max(...a) - Math.max(...b));
+    if (cands.length) return { frets: cands[0], simplified: qq !== q };
+  }
+  return null;
+}
+function chordSvg(name) {
+  const sh = chordShape(name);
+  if (!sh) return '<svg viewBox="0 0 64 80" aria-hidden="true"><text x="32" y="46" text-anchor="middle" font-size="11" fill="currentColor">?</text></svg>';
+  const f = sh.frets;
+  const pressed = f.filter((x) => x > 0);
+  const hi = pressed.length ? Math.max(...pressed) : 0;
+  const lo = pressed.length ? Math.min(...pressed) : 0;
+  const base = hi > 5 ? lo : 1;
+  const X = (i) => 7 + i * 10, Y = (fr) => 18 + (fr - base + 0.5) * 12;
+  let s = `<svg viewBox="-9 0 73 82" aria-label="Diagramme ${esc(name)}" role="img">`;
+  for (let i = 0; i < 6; i++) s += `<line x1="${X(i)}" y1="18" x2="${X(i)}" y2="78" stroke="currentColor" stroke-width="1"/>`;
+  for (let k = 0; k <= 5; k++) s += `<line x1="7" y1="${18 + k * 12}" x2="57" y2="${18 + k * 12}" stroke="currentColor" stroke-width="${k === 0 && base === 1 ? 3 : 1}"/>`;
+  if (base > 1) s += `<text x="-8" y="${Y(base) + 3}" font-size="8.5" font-weight="700" fill="currentColor">${base}</text>`;
+  // Barré : la case la plus basse, tenue d'une corde jusqu'à la chanterelle sans corde à vide ni muette entre les deux.
+  const atLo = f.map((x, i) => (x === lo ? i : -1)).filter((i) => i >= 0);
+  const barre = lo > 0 && atLo.length >= 2 && f[5] === lo && f.slice(atLo[0]).every((x) => x >= lo);
+  if (barre) s += `<rect x="${X(atLo[0]) - 3.5}" y="${Y(lo) - 3.5}" width="${X(5) - X(atLo[0]) + 7}" height="7" rx="3.5" fill="currentColor"/>`;
+  f.forEach((x, i) => {
+    if (x < 0) s += `<path d="M${X(i) - 3} 6l6 6M${X(i) + 3} 6l-6 6" stroke="currentColor" stroke-width="1.4"/>`;
+    else if (x === 0) s += `<circle cx="${X(i)}" cy="9" r="3" fill="none" stroke="currentColor" stroke-width="1.3"/>`;
+    else if (!(barre && x === lo)) s += `<circle cx="${X(i)}" cy="${Y(x)}" r="4" fill="currentColor"/>`;
+  });
+  return s + '</svg>';
+}
+const songChords = (lines, shift) => [...new Set(lines.flatMap((l) => (l.chunks || []).map((c) => c.ch).filter(Boolean)).map((c) => transposeChord(c, shift)))].slice(0, 24);
+
+/* ----- Paroles synchronisées (LRCLIB) : la ligne en cours s'allume, calée sur l'original ----- */
+function parseLrc(txt) {
+  const out = [];
+  String(txt || '').split('\n').forEach((line) => {
+    const tags = [...line.matchAll(/\[(\d+):(\d+(?:\.\d+)?)\]/g)];
+    if (!tags.length) return;
+    const text = line.replace(/\[[^\]]*\]/g, '').trim();
+    tags.forEach((m) => out.push({ t: Number(m[1]) * 60 + Number(m[2]), text }));
+  });
+  return out.sort((a, b) => a.t - b.t);
+}
+const lrcWords = (s) => normTxt(s).split(' ').filter(Boolean);
+// On aligne chaque ligne minutée sur la ligne de paroles correspondante, dans l'ordre.
+function syncMap(lines, lrc) {
+  const lyr = [];
+  lines.forEach((l, i) => { const w = lrcWords(lineText(l)); if (w.length) lyr.push({ i, w: new Set(w) }); });
+  const map = [];
+  let p = 0;
+  for (const e of lrc) {
+    const ew = lrcWords(e.text);
+    if (!ew.length) { map.push({ t: e.t, li: -1 }); continue; }
+    let best = -1, bs = 0;
+    for (let k = p; k < Math.min(lyr.length, p + 8); k++) {
+      const sc = ew.filter((w) => lyr[k].w.has(w)).length / ew.length;
+      if (sc > bs + 0.05) { bs = sc; best = k; }
+    }
+    if (best >= 0 && bs >= 0.5) { map.push({ t: e.t, li: lyr[best].i }); p = best + 1; }
+  }
+  return map;
+}
+function syncFor(song) {
+  if (!song) return null;
+  const ly = app.lyrics[lyricsKey(song)];
+  if (!ly || ly.state !== 'ok' || !ly.synced) return null;
+  const base = sheetBase(song);
+  if (!base.text) return null;
+  const key = hashStr(base.text) + ':' + base.text.length + ':' + ly.synced.length;
+  const c = app.syncCache[song.id];
+  if (c && c.key === key) return c.map;
+  const map = syncMap(cpParse(base.text), parseLrc(ly.synced));
+  const ok = map.filter((m) => m.li >= 0).length >= 4 ? map : null;
+  app.syncCache[song.id] = { key, map: ok };
+  return ok;
+}
+function syncLine(map, t) {
+  let li = -1;
+  for (const m of map) { if (m.t > t) break; li = m.li; }
+  return li;
+}
+function syncHighlight(root, li, follow) {
+  const cp = root && root.querySelector('.cp');
+  if (!cp) return;
+  cp.classList.toggle('syncing', li >= 0);
+  const cur = cp.querySelector('.cp-line.now');
+  const want = li >= 0 ? cp.querySelector(`.cp-line[data-li="${li}"]`) : null;
+  if (cur === want) return;
+  if (cur) cur.classList.remove('now');
+  root.querySelectorAll('.fr-b.now').forEach((b) => b.classList.remove('now'));
+  if (!want) return;
+  want.classList.add('now');
+  const part = want.closest('.cp-part');
+  const b = part && root.querySelector(`.fr-b[data-i="${part.dataset.part}"]`);
+  if (b) b.classList.add('now');
+  if (follow) want.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+// Page du morceau : on lance le défilement en même temps que l'original (ou la répète).
+const kara = { id: null, t: 0, run: false, last: 0 };
+setInterval(() => {
+  const now = performance.now();
+  if (kara.id) {
+    if (kara.run) kara.t += Math.min(1, (now - kara.last) / 1000);
+    kara.last = now;
+    const song = D('songs')[kara.id];
+    const open = song && app.sheet && app.sheet.type === 'song' && app.sheet.id === kara.id && !app.cpEdit;
+    const map = open && syncFor(song);
+    if (!map) { kara.id = null; renderSheet(); }
+    else {
+      const root = $('#sheet');
+      syncHighlight(root, syncLine(map, kara.t), kara.run);
+      const tm = root.querySelector('.kara-time');
+      if (tm) tm.textContent = `${Math.floor(kara.t / 60)}:${pad(Math.floor(kara.t % 60))}`;
+    }
+  }
+  const st = app.stage;
+  if (st && st.scroll) {
+    const s = D('songs')[stageIds()[st.idx]];
+    const map = s && st.lyrics && syncFor(s);
+    if (map) syncHighlight($('#stage'), syncLine(map, st.syncT || 0), false);
+  }
+}, 100);
+
+/* ----- Ce qu'on affiche : notre version, sinon la grille trouvée en ligne, sinon les paroles seules ----- */
+function sheetBase(song) {
+  if (song.sheet) return { src: 'ours', text: song.sheet };
+  if (app.mode === 'local') return { src: 'none', state: 'local' };
+  loadSheet(song);
+  const sh = app.sheets[lyricsKey(song)] || { state: 'loading' };
+  if (sh.state === 'loading') return { src: 'none', state: 'loading' };
+  if (sh.state === 'ok') { if (sh.cp == null) sh.cp = ugToCP(sh.content); return { src: 'ug', text: sh.cp, meta: sh }; }
+  loadLyrics(song);
+  const ly = app.lyrics[lyricsKey(song)] || { state: 'loading' };
+  if (ly.state === 'ok' && ly.text && !ly.instrumental) return { src: 'lrc', text: ly.text.trim(), why: sh.state };
+  const state = ly.state === 'loading' ? 'loading' : ly.instrumental ? 'instrumental' : sh.state === 'error' || ly.state === 'error' ? 'error' : 'none';
+  return { src: 'none', state };
+}
+const SHEET_EMPTY = {
+  local: 'Disponible sur le site en ligne.',
+  loading: 'Chargement…',
+  instrumental: 'Instrumental.',
+  none: 'Ni grille ni paroles trouvées. Touche « Accords » pour écrire la vôtre.',
+  error: 'Grille indisponible. <button class="link-btn" data-act="sheet-retry">Réessayer</button>',
+};
+
+// Éditeur : structure (parties, ordre, couleurs), paroles de chaque partie, accords posés en touchant les mots.
 function cpEditor(song) {
   const ed = app.cpEdit;
   const shift = Number(song.shift) || 0;
+  const cur = song.sheet || '';
+  if (cur !== ed.saved) { ed.lines = cpParse(cur || ed.start); ed.saved = cur; ed.sel = null; ed.part = null; ed.colors = null; } // changé ailleurs (annuler, un autre membre)
   if (ed.raw) {
     return `
       <p class="hint" style="margin-top:0"><code>[Am]mot</code> pour un accord, <code># Refrain</code> pour une partie.</p>
       <textarea class="input chart-input" id="cpRaw" data-draft="cp.raw" spellcheck="false" placeholder="# Couplet&#10;[Am]Première ligne des [G]paroles">${esc(draft('cp.raw'))}</textarea>
       <div class="chart-actions">
         <button class="btn primary" data-act="cp-save">Terminé</button>
-        <button class="btn" data-act="cp-raw">Placer en touchant les mots</button>
+        <button class="btn" data-act="cp-raw">Revenir aux parties</button>
       </div>`;
   }
   const sel = ed.sel;
-  const shown = cpShift(ed.lines, shift);
-  const recent = [...new Set(shown.flatMap((l) => (l.chunks || []).map((c) => c.ch).filter(Boolean)))].slice(0, 12);
+  const recent = songChords(ed.lines, shift).slice(0, 12);
   const word = sel ? ((ed.lines[sel.l] || {}).chunks || [])[sel.c] : null;
+  const parts = cpParts(ed.lines);
   return `
     <div class="cp-bar">
-      <span>Touche un mot pour poser un accord. Enregistré tout seul.</span>
+      <span>Touche un mot pour son accord.</span>
       <button class="btn small primary" data-act="cp-save">Terminé</button>
     </div>
-    ${cpHtml(ed.lines, shift, { edit: true, sel: sel ? sel.l + ':' + sel.c : '' })}
+    <div class="struct">
+      <h4 class="struct-h">Structure</h4>
+      <ol class="struct-list">${parts.map((p, n) => {
+        const col = p.head >= 0 ? secColor(song, p.label) : 'sable';
+        const nl = ed.lines.slice(p.start, p.end).filter((l) => l.chunks && l.chunks.length).length;
+        return `<li class="sp" style="--sc: var(--sc-${col})">
+          <button class="sp-dot" data-act="part-colors" data-i="${n}" aria-label="Couleur" aria-expanded="${ed.colors === n}"></button>
+          <input class="sp-name" value="${esc(p.head >= 0 ? frSection(p.label) : '')}" placeholder="Début" data-commit="part-rename" data-i="${n}" list="secTypes" maxlength="30" aria-label="Nom de la partie">
+          <span class="sp-n">${nl ? plural(nl, 'ligne', 'lignes') : 'vide'}</span>
+          <span class="sp-act">
+            <button data-act="part-move" data-i="${n}" data-v="-1" ${n ? '' : 'disabled'} aria-label="Monter">${ICON.chevUp}</button>
+            <button data-act="part-move" data-i="${n}" data-v="1" ${n < parts.length - 1 ? '' : 'disabled'} aria-label="Descendre">${ICON.chevDown}</button>
+            <button data-act="part-dup" data-i="${n}" aria-label="Dupliquer">${ICON.copy}</button>
+            <button data-act="part-del" data-i="${n}" aria-label="Supprimer">${ICON.trash}</button>
+          </span>
+        </li>${ed.colors === n ? `<li class="sp-colors">${Object.entries(SEC_COLORS).map(([k, l]) => `<button data-act="part-color" data-i="${n}" data-v="${k}" style="--sc: var(--sc-${k})" aria-label="${l}" aria-pressed="${k === col}"></button>`).join('')}<small>Pour tous les « ${esc(frSection(p.label) || 'Début')} »</small></li>` : ''}`;
+      }).join('')}</ol>
+      <select class="input struct-add" data-commit="part-add" aria-label="Ajouter une partie"><option value="">+ Ajouter une partie</option>${SEC_ADD.map((l) => `<option>${l}</option>`).join('')}</select>
+      <datalist id="secTypes">${SEC_TYPES.map(([, l]) => `<option value="${l}">`).join('')}</datalist>
+    </div>
+    <div class="cp edit">${partsHtml(song, ed.lines, shift, { edit: true, sel: sel ? sel.l + ':' + sel.c : '', song })}</div>
     <div class="chart-actions">
-      <button class="btn small" data-act="cp-raw">Modifier le texte</button>
+      <button class="btn small" data-act="cp-raw">Tout le texte d’un coup</button>
       ${song.sheet ? '<button class="btn small ghost danger" data-act="cp-reset">Effacer notre version</button>' : ''}
     </div>
     ${word ? `
     <div class="cp-picker">
-      <div class="cpp-head"><span>Accord sur «\u00a0${esc(word.tx.trim() || '…')}\u00a0»</span><button class="btn small primary" data-act="cp-done">OK</button></div>
+      <div class="cpp-head"><span>Accord sur « ${esc(word.tx.trim() || '…')} »</span><button class="btn small primary" data-act="cp-done">OK</button></div>
       ${recent.length ? `<div class="cpp-row">${recent.map((c) => `<button class="cpp-chip" data-act="cp-recent" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
       <div class="cpp-grid">${CP_ROOTS.map((r) => `<button data-act="cp-root" data-v="${r}" aria-pressed="${ed.root === r}">${r}</button>`).join('')}</div>
       <div class="cpp-grid q">${CP_QUALS.map(([v, l]) => `<button data-act="cp-qual" data-v="${v}" aria-pressed="${ed.root && ed.qual === v}">${l}</button>`).join('')}</div>
       <button class="link-btn" data-act="cp-clear">Retirer l’accord</button>
     </div>` : ''}`;
 }
-// Bloc « Accords et paroles » : notre version si on en a une, sinon celle trouvée en ligne.
-function songSheetBlock(song, stage) {
-  const shift = Number(song.shift) || 0;
-  if (!stage && app.cpEdit && app.cpEdit.id === song.id) return cpEditor(song);
-  if (song.sheet) {
-    if (stage) return `${shift ? `<div class="st-cs-meta">Tona ${shiftLabel(song)}</div>` : ''}${cpHtml(cpParse(song.sheet), shift, { stage: true })}`;
-    return `${shift ? `<div class="cs-tools"><span class="cs-chip">Tona ${shiftLabel(song)}</span></div>` : ''}${cpHtml(cpParse(song.sheet), shift)}`;
-  }
-  if (stage) return chordBlock(song, true);
-  return chordBlock(song);
-}
 
-// Bloc « Accords et paroles » de la fiche (et du mode scène). Sans grille trouvée, on montre les paroles seules.
-function chordBlock(s, stage) {
-  if (app.mode === 'local') return '<p class="empty-note">Disponible sur le site en ligne.</p>';
-  loadSheet(s);
-  const sh = app.sheets[lyricsKey(s)] || { state: 'loading' };
-  if (sh.state === 'loading') return '<p class="empty-note">Chargement…</p>';
-  if (sh.state !== 'ok') {
-    const why = sh.state === 'none'
-      ? 'Pas de grille trouvée. Les paroles :'
-      : 'Grille indisponible. <button class="link-btn" data-act="sheet-retry">Réessayer</button>';
-    return `<p class="empty-note">${why}</p>${lyricsBody(s, stage ? 'st-lyrics' : 'lyrics')}`;
-  }
-  const shift = Math.max(-11, Math.min(11, Number(s.shift) || 0));
-  const bits = [sh.capo ? `Capo ${sh.capo}` : '', sh.tuning && !/^standard$/i.test(sh.tuning) ? `Accordage ${sh.tuning}` : '', shift ? `Tona ${shiftLabel(s)}` : ''].filter(Boolean);
+// Bloc « Accords et paroles » de la page du morceau et du mode scène.
+function songSheetBlock(song, stage) {
+  if (!stage && app.cpEdit && app.cpEdit.id === song.id) return cpEditor(song);
+  const base = sheetBase(song);
+  if (base.src === 'none') return `<p class="empty-note">${SHEET_EMPTY[base.state] || SHEET_EMPTY.none}</p>`;
+  if (base.src !== 'lrc') loadLyrics(song); // pour les paroles synchronisées
+  const shift = Math.max(-11, Math.min(11, Number(song.shift) || 0));
+  const lines = cpParse(base.text);
+  const view = app.sheetView;
+  const sh = base.meta || {};
+  const bits = [sh.capo ? `Capo ${sh.capo}` : '', sh.tuning && !/^standard$/i.test(sh.tuning) ? `Accordage ${sh.tuning}` : '', shift ? `Tona ${shiftLabel(song)}` : ''].filter(Boolean);
+  const o = { stage, view, pop: !stage, marking: !stage && app.marking, song };
+  const body = partsHtml(song, lines, shift, o);
   if (stage) {
-    return `${bits.length ? `<div class="st-cs-meta">${esc(bits.join(' · '))}</div>` : ''}${chordSheetHtml(sh, shift, 'st-sheet')}`;
+    return `${bits.length ? `<div class="st-cs-meta">${esc(bits.join(' · '))}</div>` : ''}${friseHtml(song, lines)}<div class="cp on-stage${view === 'grid' ? ' grid' : ''}">${body}</div>`;
   }
+  const map = syncFor(song);
+  const karaOn = kara.id === song.id;
+  const chords = app.sheetDiag ? songChords(lines, shift) : [];
+  const source = base.src === 'ug' ? `Ultimate Guitar${sh.rating ? ` · ${String(sh.rating).replace('.', ',')}/5` : ''}` : base.src === 'lrc' ? `Pas de grille trouvée : paroles seules${base.why === 'error' ? ' · <button class="link-btn" data-act="sheet-retry">Réessayer la grille</button>' : ''}` : 'Notre version';
   return `
-    ${bits.length ? `<div class="cs-tools">${bits.map((b) => `<span class="cs-chip">${esc(b)}</span>`).join('')}</div>` : ''}
-    ${chordSheetHtml(sh, shift, 'chordsheet')}
-    <p class="hint">Ultimate Guitar${sh.rating ? ` · ${String(sh.rating).replace('.', ',')}/5` : ''}</p>`;
+    <div class="sh-tools">
+      <div class="seg sm" role="group" aria-label="Affichage">
+        <button data-act="sheet-view" data-v="full" aria-pressed="${view !== 'grid'}">Paroles</button>
+        <button data-act="sheet-view" data-v="grid" aria-pressed="${view === 'grid'}">Grille</button>
+      </div>
+      <button class="tchip" data-act="sheet-diag" aria-pressed="${!!app.sheetDiag}">Diagrammes</button>
+      <button class="tchip" data-act="sheet-marks" aria-pressed="${!!app.marking}">Repères</button>
+      ${map && !karaOn ? `<button class="tchip" data-act="kara-start" title="Lance-le au début du morceau : la ligne en cours s’allume">${ICON.play}Paroles synchro</button>` : ''}
+      <span class="zoom2" role="group" aria-label="Taille du texte"><button data-act="sheet-zoom" data-v="-1" aria-label="Texte plus petit">A−</button><button data-act="sheet-zoom" data-v="1" aria-label="Texte plus grand">A+</button></span>
+      ${bits.map((b) => `<span class="cs-chip">${esc(b)}</span>`).join('')}
+    </div>
+    ${karaOn ? `
+    <div class="kara on">
+      <button class="btn small primary" data-act="kara-pause">${kara.run ? ICON.pause + 'Pause' : ICON.play + 'Reprendre'}</button>
+      <span class="kara-time">0:00</span>
+      <button class="btn small ghost" data-act="kara-nudge" data-v="-1" aria-label="Reculer d’une seconde">−1 s</button>
+      <button class="btn small ghost" data-act="kara-nudge" data-v="1" aria-label="Avancer d’une seconde">+1 s</button>
+      <button class="btn small ghost" data-act="kara-stop" aria-label="Arrêter">${ICON.close}</button>
+    </div>` : ''}
+    ${friseHtml(song, lines)}
+    ${chords.length ? `<div class="cd-strip">${chords.map((c) => `<figure class="cd"><button data-act="chord-pop" data-v="${esc(c)}" aria-label="${esc(c)}">${chordSvg(c)}</button><figcaption>${esc(c)}</figcaption></figure>`).join('')}</div>` : ''}
+    ${app.marking ? '<p class="hint mk-hint">Touche une ligne pour y noter un repère.</p>' : ''}
+    <div class="cp${view === 'grid' ? ' grid' : ''}" style="--sz:${app.sheetZoom}">${body}</div>
+    <p class="hint">${source}</p>
+    ${app.chordPop ? `
+    <div class="cd-pop" role="dialog" aria-label="Diagramme de ${esc(app.chordPop)}">
+      ${chordSvg(app.chordPop)}
+      <div class="cd-pop-t"><b>${esc(app.chordPop)}</b>${(chordShape(app.chordPop) || {}).simplified ? '<small>Forme simplifiée</small>' : ''}</div>
+      <button class="btn small ghost" data-act="chord-pop-close" aria-label="Fermer">${ICON.close}</button>
+    </div>` : ''}`;
 }
 
 const ICON = {
@@ -305,6 +625,10 @@ const ICON = {
   dl: '<svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14"/></svg>',
   ul: '<svg viewBox="0 0 24 24"><path d="M12 15.5v-11M7.5 9L12 4.5 16.5 9M5 19.5h14"/></svg>',
   share: '<svg viewBox="0 0 24 24"><path d="M12 14V4M8 7.5l4-4 4 4M7 10.5H5.5v9h13v-9H17"/></svg>',
+  chevUp: '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>',
+  chevDown: '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>',
+  copy: '<svg viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5"/></svg>',
 };
 const PREVIEW = !!window.HYSTERIA_PREVIEW;
 const TABS = ['repertoire', 'setlist', 'planning', 'matos'];
@@ -372,6 +696,13 @@ const app = {
   seenBefore: 0,
   chartEdit: null,
   cpEdit: null,
+  sheetView: LS.get('hy.sheetView', 'full') === 'grid' ? 'grid' : 'full',
+  sheetZoom: LS.get('hy.sheetZoom', 1),
+  sheetDiag: LS.get('hy.sheetDiag', false),
+  marking: false,
+  markEdit: null,
+  chordPop: null,
+  syncCache: {},
   partsEdit: null,
   plotSel: null,
   repTab: LS.get('hy.repTab', 'songs'),
@@ -1544,6 +1875,8 @@ function closeSheet() {
   app.sheet = null;
   app.chartEdit = null;
   app.cpEdit = null;
+  app.markEdit = null;
+  app.chordPop = null;
   renderSheet();
   if (wasActivity) renderHeader();
 }
@@ -1631,7 +1964,7 @@ function sheetSong(s) {
 
     <div class="song-body">
       <div class="sb-chords" id="chordsSec">
-        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">${song.sheet ? 'Modifier' : 'Placer nos accords'}</button></span>`}</h3>
+        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">Modifier</button></span>`}</h3>
         ${songSheetBlock(song)}
         <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
       </div>
@@ -2093,10 +2426,44 @@ function cpApply() {
   const song = D('songs')[ed.id];
   const shift = Number(song.shift) || 0;
   chunk.ch = ed.root ? transposeChord(ed.root + ed.qual, -shift) : '';
-  const text = cpSerialize(ed.lines).trim().slice(0, 18000);
-  if (text && text !== song.sheet) {
-    commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...(!song.sheet ? logOps(`a posé les accords de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id) : [])]);
-  } else renderSheet();
+  cpSave();
+}
+// Enregistre la version en cours d'édition (annulable si on donne un libellé).
+function cpSave(undoLabel) {
+  const ed = app.cpEdit;
+  const song = ed && D('songs')[ed.id];
+  if (!song) return;
+  const text = cpSerialize(ed.lines).replace(/\n{3,}/g, '\n\n').trim().slice(0, 18000);
+  if (!text || text === (song.sheet || '')) { renderSheet(); return; }
+  // Rien de changé par rapport à la grille trouvée en ligne : on ne crée pas encore notre version.
+  if (!song.sheet && text === cpSerialize(cpParse(ed.start)).replace(/\n{3,}/g, '\n\n').trim()) { renderSheet(); return; }
+  ed.saved = text;
+  const ops = [{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...(!song.sheet ? logOps(`a fait sa version de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id) : [])];
+  if (undoLabel) commitUndoable(ops, undoLabel); else commit(ops);
+}
+// Partie n de l'éditeur, avec la ligne-titre. Le début sans titre est nommé avant d'être déplacé.
+function cpPart(n, name) {
+  const ed = app.cpEdit;
+  let parts = cpParts(ed.lines);
+  if (name && parts[n] && parts[n].head < 0) { ed.lines.splice(parts[n].start, 0, { sec: 'Début' }); parts = cpParts(ed.lines); }
+  const p = parts[n];
+  return p ? { p, from: p.head >= 0 ? p.head : p.start, to: p.end, parts } : null;
+}
+// Applique le texte de la partie en cours d'écriture.
+function cpPartApply() {
+  const ed = app.cpEdit;
+  if (!ed || ed.part == null) return false;
+  const r = cpPart(ed.part);
+  ed.part = null;
+  if (!r) return false;
+  const shift = Number(D('songs')[ed.id].shift) || 0;
+  const nl = cpShift(cpParse(draft('cp.part').replace(/\s+$/, '')), -shift);
+  while (nl.length && nl[nl.length - 1].chunks && !nl[nl.length - 1].chunks.length) nl.pop();
+  if (r.p !== r.parts[r.parts.length - 1]) nl.push({ chunks: [] });
+  const before = cpSerialize(ed.lines.slice(r.p.start, r.p.end)).trim();
+  ed.lines.splice(r.p.start, r.p.end - r.p.start, ...nl);
+  delete app.drafts['cp.part'];
+  return cpSerialize(nl).trim() !== before;
 }
 
 /* ----- Activité ----- */
@@ -2208,7 +2575,9 @@ function renderStage() {
           ${st.scroll ? `<button class="st-mini" data-act="scroll-speed" data-v="-1" aria-label="Plus lent">−</button><span class="st-val">×${String(Math.round(factor * 10) / 10).replace('.', ',')}</span><button class="st-mini" data-act="scroll-speed" data-v="1" aria-label="Plus vite">+</button>` : ''}
         </span>
         <button class="st-btn" data-act="stage-lyrics" aria-pressed="${!!st.lyrics}">Accords et paroles</button>
+        ${st.lyrics ? `<button class="st-btn" data-act="sheet-view" data-v="${app.sheetView === 'grid' ? 'full' : 'grid'}" aria-pressed="${app.sheetView === 'grid'}">Grille</button>` : ''}
       </div>
+      ${st.scroll && st.paused && !st.syncT && st.lyrics && syncFor(s) ? '<p class="st-hint">Paroles synchro : touche l’écran quand le morceau commence.</p>' : ''}
       ${st.lyrics ? `<div class="st-lyr">${songSheetBlock(s, true)}</div>` : ''}` : `
       <div>
         <div class="st-kind">Intermède</div>
@@ -2276,7 +2645,10 @@ function renderStage() {
   if (nb) nb.scrollTop = keep;
   const now = el.querySelector('.ss-row.now');
   if (now) now.scrollIntoView({ block: 'nearest' });
-  if (st.shown !== cur.id) { st.pos = 0; st.lastSet = 0; st.scrollStart = performance.now() + 2500; }
+  if (st.shown !== cur.id) {
+    st.pos = 0; st.lastSet = 0; st.scrollStart = performance.now() + 2500; st.syncT = 0; st.armed = null;
+  }
+  if (nxt && app.mode !== 'local') { if (!nxt.sheet) loadSheet(nxt); loadLyrics(nxt); } // le suivant est prêt à temps
   st.shown = cur.id;
   if (st.scroll && !st.paused) startScroll();
 }
@@ -2307,9 +2679,26 @@ function scrollLoop(now) {
   requestAnimationFrame(scrollLoop);
   const b = document.querySelector('#stage .st-body');
   const s = D('songs')[stageIds()[st.idx]];
-  if (!b || !s || now < (st.scrollStart || 0)) return;
+  const map = s && st.lyrics && syncFor(s);
+  if (!b || !s || (!map && now < (st.scrollStart || 0))) return;
   if (Math.abs(b.scrollTop - (st.lastSet || 0)) > 3) st.pos = b.scrollTop; // on a fait défiler à la main
   const max = b.scrollHeight - b.clientHeight;
+  if (map) {
+    // Paroles synchronisées : au premier passage on attend un toucher au début du morceau.
+    if (st.armed !== s.id) { st.armed = s.id; if (!st.syncT) { st.paused = true; renderStage(); return; } }
+    // Puis on suit le minutage de l'original (accéléré ou ralenti avec ×).
+    const factor = Math.max(0.4, Math.min(2.5, Number(s.scrollx) || 1));
+    st.syncT = (st.syncT || 0) + dt * factor;
+    const li = syncLine(map, st.syncT);
+    const line = li >= 0 && b.querySelector(`.cp-line[data-li="${li}"]`);
+    if (!line) return;
+    const target = Math.max(0, Math.min(max, line.getBoundingClientRect().top - b.getBoundingClientRect().top + b.scrollTop - b.clientHeight * 0.32));
+    const from = st.pos || b.scrollTop;
+    st.pos = from + (target - from) * Math.min(1, dt * 4);
+    b.scrollTop = st.pos;
+    st.lastSet = b.scrollTop;
+    return;
+  }
   if (max <= 0 || st.pos >= max) return;
   const factor = Math.max(0.4, Math.min(2.5, Number(s.scrollx) || 1));
   st.pos = Math.min(max, (st.pos || 0) + (max / scrollDuration(s)) * factor * dt);
@@ -3071,10 +3460,13 @@ const actions = {
     if (!text) {
       const sh = app.sheets[lyricsKey(song)];
       const ly = app.lyrics[lyricsKey(song)];
-      if (sh && sh.state === 'ok') text = ugToCP(sh.content);
+      if (sh && sh.state === 'ok') text = sh.cp != null ? sh.cp : ugToCP(sh.content);
       else if (ly && ly.state === 'ok' && ly.text) text = ly.text.trim();
     }
-    app.cpEdit = { id: song.id, lines: cpParse(text), sel: null, root: '', qual: '', raw: !text.trim() };
+    app.cpEdit = { id: song.id, lines: cpParse(text), start: text, saved: song.sheet || '', sel: null, root: '', qual: '', raw: !text.trim(), part: null, colors: null };
+    app.marking = false;
+    app.markEdit = null;
+    app.chordPop = null;
     if (app.cpEdit.raw) app.drafts['cp.raw'] = '';
     renderSheet();
   },
@@ -3084,6 +3476,7 @@ const actions = {
     const l = Number(el.dataset.l), c = Number(el.dataset.c);
     const chunk = ((ed.lines[l] || {}).chunks || [])[c];
     if (!chunk) return;
+    if (ed.part != null) { if (cpPartApply()) cpSave(); else renderSheet(); return; }
     ed.sel = { l, c };
     const shown = chunk.ch ? transposeChord(chunk.ch, Number(D('songs')[ed.id].shift) || 0) : '';
     const m = shown.match(/^([A-G](?:#|b)?)(.*)$/);
@@ -3106,6 +3499,7 @@ const actions = {
   'cp-raw'() {
     const ed = app.cpEdit;
     if (!ed) return;
+    cpPartApply();
     const shift = Number(D('songs')[ed.id].shift) || 0;
     if (ed.raw) { ed.lines = cpShift(cpParse(draft('cp.raw')), -shift); ed.raw = false; }
     else { app.drafts['cp.raw'] = cpSerialize(cpShift(ed.lines, shift)); ed.raw = true; ed.sel = null; }
@@ -3117,13 +3511,181 @@ const actions = {
     const song = ed && D('songs')[ed.id];
     if (!song) return;
     const shift = Number(song.shift) || 0;
+    cpPartApply();
     const lines = ed.raw ? cpShift(cpParse(draft('cp.raw')), -shift) : ed.lines;
-    const text = cpSerialize(lines).trim().slice(0, 18000);
+    const text = cpSerialize(lines).replace(/\n{3,}/g, '\n\n').trim().slice(0, 18000);
     app.cpEdit = null;
     delete app.drafts['cp.raw'];
     if (!text || text === song.sheet) { renderSheet(); return; }
-    commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...logOps(`a posé les accords de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id)]);
+    commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...logOps(`a fait sa version de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id)]);
   },
+  /* Structure du morceau */
+  'part-rename'(el) {
+    const ed = app.cpEdit;
+    const r = ed && cpPart(Number(el.dataset.i));
+    if (!r) return;
+    const name = el.value.trim().slice(0, 30);
+    if (!name) { renderSheet(); return; }
+    if (r.p.head >= 0) ed.lines[r.p.head] = { sec: name };
+    else ed.lines.splice(r.from, 0, { sec: name });
+    cpSave();
+  },
+  'part-move'(el) {
+    const ed = app.cpEdit;
+    if (!ed) return;
+    cpPartApply();
+    const n = Number(el.dataset.i), d = Number(el.dataset.v);
+    if (!cpPart(n, true) || !cpPart(n + d, true)) return;
+    const parts = cpParts(ed.lines);
+    const [x, y] = d < 0 ? [parts[n + d], parts[n]] : [parts[n], parts[n + d]];
+    const xs = ed.lines.slice(x.head, x.end), ys = ed.lines.slice(y.head, y.end);
+    if (ys.length && ys[ys.length - 1].chunks && ys[ys.length - 1].chunks.length) ys.push({ chunks: [] });
+    ed.lines.splice(x.head, y.end - x.head, ...ys, ...xs);
+    ed.colors = null;
+    cpSave();
+  },
+  'part-dup'(el) {
+    const ed = app.cpEdit;
+    if (!ed) return;
+    cpPartApply();
+    const r = cpPart(Number(el.dataset.i), true);
+    if (!r) return;
+    const copy = JSON.parse(JSON.stringify(ed.lines.slice(r.from, r.to)));
+    if (copy.length && copy[copy.length - 1].chunks && copy[copy.length - 1].chunks.length) copy.push({ chunks: [] });
+    ed.lines.splice(r.to, 0, ...copy);
+    cpSave();
+  },
+  'part-del'(el) {
+    const ed = app.cpEdit;
+    if (!ed) return;
+    cpPartApply();
+    const r = cpPart(Number(el.dataset.i));
+    if (!r) return;
+    ed.lines.splice(r.from, r.to - r.from);
+    ed.colors = null;
+    cpSave(`« ${frSection(r.p.label) || 'Début'} » supprimé`);
+  },
+  'part-add'(el) {
+    const ed = app.cpEdit;
+    const label = el.value;
+    el.value = '';
+    if (!ed || !label) return;
+    cpPartApply();
+    const same = cpParts(ed.lines).filter((p) => secType(p.label) === secType(label)).length;
+    const name = ['Couplet'].includes(label) ? `${label} ${same + 1}` : label;
+    while (ed.lines.length && ed.lines[ed.lines.length - 1].chunks && !ed.lines[ed.lines.length - 1].chunks.length) ed.lines.pop();
+    if (ed.lines.length) ed.lines.push({ chunks: [] });
+    ed.lines.push({ sec: name });
+    ed.part = cpParts(ed.lines).length - 1;
+    ed.sel = null;
+    app.drafts['cp.part'] = '';
+    cpSave();
+    setTimeout(() => { const t = $('#cpPart'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 60);
+  },
+  'part-colors'(el) {
+    const ed = app.cpEdit;
+    if (!ed) return;
+    const n = Number(el.dataset.i);
+    ed.colors = ed.colors === n ? null : n;
+    renderSheet();
+  },
+  'part-color'(el) {
+    const ed = app.cpEdit;
+    const song = ed && D('songs')[ed.id];
+    const p = song && cpParts(ed.lines)[Number(el.dataset.i)];
+    if (!p || !SEC_COLORS[el.dataset.v]) return;
+    ed.colors = null;
+    commit([{ op: 'set', path: ['songs', song.id, 'secColors', secType(p.label)], value: el.dataset.v }]);
+  },
+  'part-text'(el) {
+    const ed = app.cpEdit;
+    if (!ed) return;
+    if (ed.part != null) { const changed = cpPartApply(); if (changed) cpSave(); }
+    const n = Number(el.dataset.i);
+    const p = cpParts(ed.lines)[n];
+    if (!p) { cpSave(); return; }
+    const shift = Number(D('songs')[ed.id].shift) || 0;
+    ed.part = n;
+    ed.sel = null;
+    app.drafts['cp.part'] = cpSerialize(cpShift(ed.lines.slice(p.start, p.end), shift)).replace(/\s+$/, '');
+    renderSheet();
+    setTimeout(() => { const t = $('#cpPart'); if (t) t.focus({ preventScroll: true }); }, 40);
+  },
+  'part-text-ok'() { if (cpPartApply()) cpSave(); else renderSheet(); },
+  'part-text-cancel'() { const ed = app.cpEdit; if (ed) { ed.part = null; delete app.drafts['cp.part']; renderSheet(); } },
+  'part-jump'(el) {
+    const root = el.closest('#stage') ? $('#stage') : $('#sheet');
+    const sec = root && root.querySelector(`.cp-part[data-part="${el.dataset.i}"]`);
+    if (sec) sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  },
+
+  /* Affichage des accords et paroles */
+  'sheet-view'(el) {
+    app.sheetView = el.dataset.v === 'grid' ? 'grid' : 'full';
+    LS.set('hy.sheetView', app.sheetView);
+    renderSheet();
+    renderStage();
+  },
+  'sheet-diag'() { app.sheetDiag = !app.sheetDiag; LS.set('hy.sheetDiag', app.sheetDiag); renderSheet(); },
+  'sheet-zoom'(el) {
+    app.sheetZoom = Math.round(Math.max(0.8, Math.min(1.8, (app.sheetZoom || 1) + Number(el.dataset.v) * 0.1)) * 10) / 10;
+    LS.set('hy.sheetZoom', app.sheetZoom);
+    renderSheet();
+  },
+  'chord-pop'(el) { app.chordPop = app.chordPop === el.dataset.v ? null : el.dataset.v; renderSheet(); },
+  'chord-pop-close'() { app.chordPop = null; renderSheet(); },
+  'sheet-marks'() {
+    app.marking = !app.marking;
+    app.markEdit = null;
+    if (app.marking && !app.me) toast('Choisis ton profil pour signer tes repères');
+    renderSheet();
+  },
+  'mark-add'(el) {
+    app.markEdit = { li: Number(el.dataset.li), id: null };
+    app.drafts['mk.text'] = '';
+    renderSheet();
+    setTimeout(() => { const t = $('#mkText'); if (t) t.focus({ preventScroll: true }); }, 30);
+  },
+  'mark-edit'(el) {
+    const song = D('songs')[app.sheet && app.sheet.id];
+    const m = song && (song.marks || {})[el.dataset.id];
+    if (!m) return;
+    app.markEdit = { li: Number(el.dataset.li), id: el.dataset.id };
+    app.drafts['mk.text'] = m.text;
+    renderSheet();
+    setTimeout(() => { const t = $('#mkText'); if (t) t.focus({ preventScroll: true }); }, 30);
+  },
+  'mark-save'() {
+    const song = D('songs')[app.sheet && app.sheet.id];
+    const me = app.markEdit;
+    if (!song || !me) return;
+    const text = draft('mk.text').trim().slice(0, 80);
+    app.markEdit = null;
+    delete app.drafts['mk.text'];
+    if (!text) { if (me.id) commitUndoable([{ op: 'del', path: ['songs', song.id, 'marks', me.id] }], 'Repère supprimé'); else renderSheet(); return; }
+    if (me.id) { commit([{ op: 'set', path: ['songs', song.id, 'marks', me.id, 'text'], value: text }]); return; }
+    const lines = cpParse(sheetBase(song).text || '');
+    const value = { at: me.li, snap: normTxt(lineText(lines[me.li])), text, by: app.me || '', ts: Date.now() };
+    commit([{ op: 'set', path: ['songs', song.id, 'marks', newId('k')], value }]);
+  },
+  'mark-del'() {
+    const song = D('songs')[app.sheet && app.sheet.id];
+    const me = app.markEdit;
+    if (!song || !me || !me.id) return;
+    app.markEdit = null;
+    commitUndoable([{ op: 'del', path: ['songs', song.id, 'marks', me.id] }], 'Repère supprimé');
+  },
+  'mark-cancel'() { app.markEdit = null; renderSheet(); },
+  'kara-start'() {
+    const song = D('songs')[app.sheet && app.sheet.id];
+    if (!song) return;
+    Object.assign(kara, { id: song.id, t: 0, run: true, last: performance.now() });
+    renderSheet();
+  },
+  'kara-pause'() { kara.run = !kara.run; kara.last = performance.now(); renderSheet(); },
+  'kara-nudge'(el) { kara.t = Math.max(0, kara.t + Number(el.dataset.v)); },
+  'kara-stop'() { kara.id = null; renderSheet(); },
+
   'cp-reset'() {
     const ed = app.cpEdit;
     const song = ed && D('songs')[ed.id];
@@ -3467,7 +4029,7 @@ const actions = {
   'stage-scroll'() {
     const st = app.stage;
     if (!st) return;
-    if (!st.scroll) { st.scroll = true; st.paused = false; st.scrollStart = performance.now() + 600; LS.set('hy.stageScroll', true); }
+    if (!st.scroll) { st.scroll = true; st.paused = false; st.scrollStart = performance.now() + 600; st.armed = stageIds()[st.idx]; LS.set('hy.stageScroll', true); }
     else if (st.paused) { st.paused = false; st.scrollStart = 0; }
     else { st.scroll = false; LS.set('hy.stageScroll', false); }
     renderStage();
@@ -3800,7 +4362,7 @@ $('#stage').addEventListener('pointerup', (e) => {
   if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - swipe.t < 900) { stageGo(dx < 0 ? 1 : -1); return; }
   // Un simple tap sur la grille met le défilement en pause (ou le relance).
   const st = app.stage;
-  if (st && st.scroll && Math.abs(dx) < 8 && Math.abs(dy) < 8 && e.target.closest('.st-body')) {
+  if (st && st.scroll && Math.abs(dx) < 8 && Math.abs(dy) < 8 && e.target.closest('.st-body') && !e.target.closest('button, a')) {
     st.paused = !st.paused;
     if (!st.paused) st.scrollStart = 0;
     renderStage();
