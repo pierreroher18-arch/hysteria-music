@@ -281,20 +281,14 @@ function marksHtml(list, o, li) {
 
 // Les parties, chacune avec sa couleur. o : { stage, edit, sel, view, pop, marking, song }.
 function partsHtml(song, lines, shift, o) {
-  const marks = o.edit ? {} : marksMap(song, lines);
+  const marks = marksMap(song, lines);
   return cpParts(lines).map((p, n) => {
     const col = p.head >= 0 ? secColor(song, p.label) : '';
-    const name = p.head >= 0 ? frSection(p.label) : (o.edit ? 'Début' : '');
-    const tools = o.edit ? `<button class="link-btn pt-btn" data-act="part-text" data-i="${n}">${ICON.edit}Paroles</button>` : '';
-    const head = name ? `<div class="cp-sec"><span class="sec-chip">${esc(name)}</span>${tools}</div>` : '';
+    const name = p.head >= 0 ? frSection(p.label) : '';
+    const head = name ? `<div class="cp-sec"><span class="sec-chip">${esc(name)}</span></div>` : '';
     const range = lines.slice(p.start, p.end);
     let body;
-    if (o.edit && app.cpEdit.part === n) {
-      body = `<div class="pt-edit">
-        <textarea class="input chart-input pt-text" id="cpPart" data-draft="cp.part" spellcheck="false" rows="${Math.min(14, Math.max(3, draft('cp.part').split('\n').length + 1))}" placeholder="[Am]Les paroles avec [G]leurs accords">${esc(draft('cp.part'))}</textarea>
-        <div class="pt-actions"><span class="hint"><code>[Am]mot</code> pour un accord</span><button class="btn small ghost" data-act="part-text-cancel">Annuler</button><button class="btn small primary" data-act="part-text-ok">OK</button></div>
-      </div>`;
-    } else if (o.view === 'grid') {
+    if (o.view === 'grid') {
       const here = Object.entries(marks).filter(([li]) => li >= p.start && li < p.end).flatMap(([, l]) => l);
       body = gridHtml(range, shift) + (here.length ? marksHtml(here, { ...o, marking: false }, -1) : '');
     } else {
@@ -443,7 +437,7 @@ setInterval(() => {
     if (kara.run) kara.t += Math.min(1, (now - kara.last) / 1000);
     kara.last = now;
     const song = D('songs')[kara.id];
-    const open = song && app.sheet && app.sheet.type === 'song' && app.sheet.id === kara.id && !app.cpEdit;
+    const open = song && app.sheet && app.sheet.type === 'song' && app.sheet.id === kara.id && !app.ed;
     const map = open && syncFor(song);
     if (!map) { kara.id = null; renderSheet(); }
     else {
@@ -479,72 +473,12 @@ const SHEET_EMPTY = {
   local: 'Disponible sur le site en ligne.',
   loading: 'Chargement…',
   instrumental: 'Instrumental.',
-  none: 'Ni grille ni paroles trouvées. Touche « Accords » pour écrire la vôtre.',
+  none: 'Ni grille ni paroles trouvées. Touche « Modifier » pour écrire la vôtre.',
   error: 'Grille indisponible. <button class="link-btn" data-act="sheet-retry">Réessayer</button>',
 };
 
-// Éditeur : structure (parties, ordre, couleurs), paroles de chaque partie, accords posés en touchant les mots.
-function cpEditor(song) {
-  const ed = app.cpEdit;
-  const shift = Number(song.shift) || 0;
-  const cur = song.sheet || '';
-  if (cur !== ed.saved) { ed.lines = cpParse(cur || ed.start); ed.saved = cur; ed.sel = null; ed.part = null; ed.colors = null; } // changé ailleurs (annuler, un autre membre)
-  if (ed.raw) {
-    return `
-      <p class="hint" style="margin-top:0"><code>[Am]mot</code> pour un accord, <code># Refrain</code> pour une partie.</p>
-      <textarea class="input chart-input" id="cpRaw" data-draft="cp.raw" spellcheck="false" placeholder="# Couplet&#10;[Am]Première ligne des [G]paroles">${esc(draft('cp.raw'))}</textarea>
-      <div class="chart-actions">
-        <button class="btn primary" data-act="cp-save">Terminé</button>
-        <button class="btn" data-act="cp-raw">Revenir aux parties</button>
-      </div>`;
-  }
-  const sel = ed.sel;
-  const recent = songChords(ed.lines, shift).slice(0, 12);
-  const word = sel ? ((ed.lines[sel.l] || {}).chunks || [])[sel.c] : null;
-  const parts = cpParts(ed.lines);
-  return `
-    <div class="cp-bar">
-      <span>Touche un mot pour son accord.</span>
-      <button class="btn small primary" data-act="cp-save">Terminé</button>
-    </div>
-    <div class="struct">
-      <h4 class="struct-h">Structure</h4>
-      <ol class="struct-list">${parts.map((p, n) => {
-        const col = p.head >= 0 ? secColor(song, p.label) : 'sable';
-        const nl = ed.lines.slice(p.start, p.end).filter((l) => l.chunks && l.chunks.length).length;
-        return `<li class="sp" style="--sc: var(--sc-${col})">
-          <button class="sp-dot" data-act="part-colors" data-i="${n}" aria-label="Couleur" aria-expanded="${ed.colors === n}"></button>
-          <input class="sp-name" value="${esc(p.head >= 0 ? frSection(p.label) : '')}" placeholder="Début" data-commit="part-rename" data-i="${n}" list="secTypes" maxlength="30" aria-label="Nom de la partie">
-          <span class="sp-n">${nl ? plural(nl, 'ligne', 'lignes') : 'vide'}</span>
-          <span class="sp-act">
-            <button data-act="part-move" data-i="${n}" data-v="-1" ${n ? '' : 'disabled'} aria-label="Monter">${ICON.chevUp}</button>
-            <button data-act="part-move" data-i="${n}" data-v="1" ${n < parts.length - 1 ? '' : 'disabled'} aria-label="Descendre">${ICON.chevDown}</button>
-            <button data-act="part-dup" data-i="${n}" aria-label="Dupliquer">${ICON.copy}</button>
-            <button data-act="part-del" data-i="${n}" aria-label="Supprimer">${ICON.trash}</button>
-          </span>
-        </li>${ed.colors === n ? `<li class="sp-colors">${Object.entries(SEC_COLORS).map(([k, l]) => `<button data-act="part-color" data-i="${n}" data-v="${k}" style="--sc: var(--sc-${k})" aria-label="${l}" aria-pressed="${k === col}"></button>`).join('')}<small>Pour tous les « ${esc(frSection(p.label) || 'Début')} »</small></li>` : ''}`;
-      }).join('')}</ol>
-      <select class="input struct-add" data-commit="part-add" aria-label="Ajouter une partie"><option value="">+ Ajouter une partie</option>${SEC_ADD.map((l) => `<option>${l}</option>`).join('')}</select>
-      <datalist id="secTypes">${SEC_TYPES.map(([, l]) => `<option value="${l}">`).join('')}</datalist>
-    </div>
-    <div class="cp edit">${partsHtml(song, ed.lines, shift, { edit: true, sel: sel ? sel.l + ':' + sel.c : '', song })}</div>
-    <div class="chart-actions">
-      <button class="btn small" data-act="cp-raw">Tout le texte d’un coup</button>
-      ${song.sheet ? '<button class="btn small ghost danger" data-act="cp-reset">Effacer notre version</button>' : ''}
-    </div>
-    ${word ? `
-    <div class="cp-picker">
-      <div class="cpp-head"><span>Accord sur « ${esc(word.tx.trim() || '…')} »</span><button class="btn small primary" data-act="cp-done">OK</button></div>
-      ${recent.length ? `<div class="cpp-row">${recent.map((c) => `<button class="cpp-chip" data-act="cp-recent" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
-      <div class="cpp-grid">${CP_ROOTS.map((r) => `<button data-act="cp-root" data-v="${r}" aria-pressed="${ed.root === r}">${r}</button>`).join('')}</div>
-      <div class="cpp-grid q">${CP_QUALS.map(([v, l]) => `<button data-act="cp-qual" data-v="${v}" aria-pressed="${ed.root && ed.qual === v}">${l}</button>`).join('')}</div>
-      <button class="link-btn" data-act="cp-clear">Retirer l’accord</button>
-    </div>` : ''}`;
-}
-
 // Bloc « Accords et paroles » de la page du morceau et du mode scène.
 function songSheetBlock(song, stage) {
-  if (!stage && app.cpEdit && app.cpEdit.id === song.id) return cpEditor(song);
   const base = sheetBase(song);
   if (base.src === 'none') return `<p class="empty-note">${SHEET_EMPTY[base.state] || SHEET_EMPTY.none}</p>`;
   if (base.src !== 'lrc') loadLyrics(song); // pour les paroles synchronisées
@@ -695,7 +629,7 @@ const app = {
   seen: LS.get('hy.seen', null),
   seenBefore: 0,
   chartEdit: null,
-  cpEdit: null,
+  ed: null,
   sheetView: LS.get('hy.sheetView', 'full') === 'grid' ? 'grid' : 'full',
   sheetZoom: LS.get('hy.sheetZoom', 1),
   sheetDiag: LS.get('hy.sheetDiag', false),
@@ -1866,7 +1800,6 @@ function viewMatos() {
 function openSheet(s) {
   app.sheet = s;
   app.chartEdit = null;
-  app.cpEdit = null;
   app.partsEdit = null;
   renderSheet();
 }
@@ -1874,7 +1807,6 @@ function closeSheet() {
   const wasActivity = app.sheet && app.sheet.type === 'activity';
   app.sheet = null;
   app.chartEdit = null;
-  app.cpEdit = null;
   app.markEdit = null;
   app.chordPop = null;
   renderSheet();
@@ -1942,7 +1874,6 @@ function sheetSong(s) {
   const link = safeUrl(song.link) || 'https://music.youtube.com/search?q=' + encodeURIComponent(song.artist + ' ' + song.title);
   const members = D('members');
   const inGigs = gigsList().filter((g) => (g.songs || []).includes(song.id));
-  const editing = app.cpEdit && app.cpEdit.id === song.id;
   ensureTone(song);
   const tone = toneOf(song);
   return `
@@ -1956,7 +1887,7 @@ function sheetSong(s) {
         </div>
         <div class="row-actions">
           <a class="btn primary" href="${esc(link)}" target="_blank" rel="noopener">${ICON.listen}Écouter</a>
-          <button class="btn" data-act="cp-edit-top" aria-pressed="${!!editing}">${ICON.edit}${editing ? 'Terminé' : 'Accords'}</button>
+          <button class="btn" data-act="ed-open">${ICON.edit}Accords et paroles</button>
           <button class="btn" data-act="song-edit">Modifier</button>
         </div>
       </div>
@@ -1964,7 +1895,7 @@ function sheetSong(s) {
 
     <div class="song-body">
       <div class="sb-chords" id="chordsSec">
-        <h3 class="block-title">Accords et paroles${editing ? '' : `<span class="bt-right"><button class="link-btn" data-act="cp-edit">Modifier</button></span>`}</h3>
+        <h3 class="block-title">Accords et paroles<span class="bt-right"><button class="link-btn" data-act="ed-open">Modifier</button></span></h3>
         ${songSheetBlock(song)}
         <a class="btn block songsterr" href="${esc(songsterrUrl(song))}" target="_blank" rel="noopener">${ICON.out}Tablature sur Songsterr</a>
       </div>
@@ -2416,54 +2347,6 @@ function sheetProfile() {
       <h3 class="block-title">${PREVIEW ? 'Aperçu' : 'Mode local'}</h3>
       <p class="empty-note" style="margin:0 0 12px">Mode local : rien n’est partagé.</p>
       <button class="btn danger" data-act="reset-local">Repartir de zéro</button>` : ''}`;
-}
-
-// Pose l'accord choisi (affiché dans la tona jouée) sur le mot sélectionné, en le stockant dans la tona d'origine.
-function cpApply() {
-  const ed = app.cpEdit;
-  const chunk = ed && ed.sel && ((ed.lines[ed.sel.l] || {}).chunks || [])[ed.sel.c];
-  if (!chunk) return;
-  const song = D('songs')[ed.id];
-  const shift = Number(song.shift) || 0;
-  chunk.ch = ed.root ? transposeChord(ed.root + ed.qual, -shift) : '';
-  cpSave();
-}
-// Enregistre la version en cours d'édition (annulable si on donne un libellé).
-function cpSave(undoLabel) {
-  const ed = app.cpEdit;
-  const song = ed && D('songs')[ed.id];
-  if (!song) return;
-  const text = cpSerialize(ed.lines).replace(/\n{3,}/g, '\n\n').trim().slice(0, 18000);
-  if (!text || text === (song.sheet || '')) { renderSheet(); return; }
-  // Rien de changé par rapport à la grille trouvée en ligne : on ne crée pas encore notre version.
-  if (!song.sheet && text === cpSerialize(cpParse(ed.start)).replace(/\n{3,}/g, '\n\n').trim()) { renderSheet(); return; }
-  ed.saved = text;
-  const ops = [{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...(!song.sheet ? logOps(`a fait sa version de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id) : [])];
-  if (undoLabel) commitUndoable(ops, undoLabel); else commit(ops);
-}
-// Partie n de l'éditeur, avec la ligne-titre. Le début sans titre est nommé avant d'être déplacé.
-function cpPart(n, name) {
-  const ed = app.cpEdit;
-  let parts = cpParts(ed.lines);
-  if (name && parts[n] && parts[n].head < 0) { ed.lines.splice(parts[n].start, 0, { sec: 'Début' }); parts = cpParts(ed.lines); }
-  const p = parts[n];
-  return p ? { p, from: p.head >= 0 ? p.head : p.start, to: p.end, parts } : null;
-}
-// Applique le texte de la partie en cours d'écriture.
-function cpPartApply() {
-  const ed = app.cpEdit;
-  if (!ed || ed.part == null) return false;
-  const r = cpPart(ed.part);
-  ed.part = null;
-  if (!r) return false;
-  const shift = Number(D('songs')[ed.id].shift) || 0;
-  const nl = cpShift(cpParse(draft('cp.part').replace(/\s+$/, '')), -shift);
-  while (nl.length && nl[nl.length - 1].chunks && !nl[nl.length - 1].chunks.length) nl.pop();
-  if (r.p !== r.parts[r.parts.length - 1]) nl.push({ chunks: [] });
-  const before = cpSerialize(ed.lines.slice(r.p.start, r.p.end)).trim();
-  ed.lines.splice(r.p.start, r.p.end - r.p.start, ...nl);
-  delete app.drafts['cp.part'];
-  return cpSerialize(nl).trim() !== before;
 }
 
 /* ----- Activité ----- */
@@ -3448,171 +3331,6 @@ const actions = {
     renderSheet();
     setTimeout(() => { const t = $('#chartText'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 40);
   },
-  'cp-edit-top'() {
-    if (app.cpEdit && app.cpEdit.id === app.sheet.id) { actions['cp-save'](); return; }
-    actions['cp-edit']();
-    setTimeout(() => { const sec = $('#chordsSec'); if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 60);
-  },
-  'cp-edit'() {
-    const song = D('songs')[app.sheet.id];
-    if (!song) return;
-    let text = song.sheet || '';
-    if (!text) {
-      const sh = app.sheets[lyricsKey(song)];
-      const ly = app.lyrics[lyricsKey(song)];
-      if (sh && sh.state === 'ok') text = sh.cp != null ? sh.cp : ugToCP(sh.content);
-      else if (ly && ly.state === 'ok' && ly.text) text = ly.text.trim();
-    }
-    app.cpEdit = { id: song.id, lines: cpParse(text), start: text, saved: song.sheet || '', sel: null, root: '', qual: '', raw: !text.trim(), part: null, colors: null };
-    app.marking = false;
-    app.markEdit = null;
-    app.chordPop = null;
-    if (app.cpEdit.raw) app.drafts['cp.raw'] = '';
-    renderSheet();
-  },
-  'cp-pick'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    const l = Number(el.dataset.l), c = Number(el.dataset.c);
-    const chunk = ((ed.lines[l] || {}).chunks || [])[c];
-    if (!chunk) return;
-    if (ed.part != null) { if (cpPartApply()) cpSave(); else renderSheet(); return; }
-    ed.sel = { l, c };
-    const shown = chunk.ch ? transposeChord(chunk.ch, Number(D('songs')[ed.id].shift) || 0) : '';
-    const m = shown.match(/^([A-G](?:#|b)?)(.*)$/);
-    ed.root = m ? m[1] : '';
-    ed.qual = m ? m[2] : '';
-    renderSheet();
-  },
-  'cp-root'(el) { const ed = app.cpEdit; if (!ed || !ed.sel) return; ed.root = el.dataset.v; cpApply(); },
-  'cp-qual'(el) { const ed = app.cpEdit; if (!ed || !ed.sel) return; ed.qual = el.dataset.v; if (ed.root) cpApply(); else renderSheet(); },
-  'cp-recent'(el) {
-    const ed = app.cpEdit;
-    if (!ed || !ed.sel) return;
-    const m = el.dataset.v.match(/^([A-G](?:#|b)?)(.*)$/);
-    if (!m) return;
-    ed.root = m[1]; ed.qual = m[2];
-    cpApply();
-  },
-  'cp-clear'() { const ed = app.cpEdit; if (!ed || !ed.sel) return; ed.root = ''; ed.qual = ''; cpApply(); },
-  'cp-done'() { if (app.cpEdit) { app.cpEdit.sel = null; renderSheet(); } },
-  'cp-raw'() {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    cpPartApply();
-    const shift = Number(D('songs')[ed.id].shift) || 0;
-    if (ed.raw) { ed.lines = cpShift(cpParse(draft('cp.raw')), -shift); ed.raw = false; }
-    else { app.drafts['cp.raw'] = cpSerialize(cpShift(ed.lines, shift)); ed.raw = true; ed.sel = null; }
-    renderSheet();
-  },
-  'cp-cancel'() { app.cpEdit = null; delete app.drafts['cp.raw']; renderSheet(); },
-  'cp-save'() {
-    const ed = app.cpEdit;
-    const song = ed && D('songs')[ed.id];
-    if (!song) return;
-    const shift = Number(song.shift) || 0;
-    cpPartApply();
-    const lines = ed.raw ? cpShift(cpParse(draft('cp.raw')), -shift) : ed.lines;
-    const text = cpSerialize(lines).replace(/\n{3,}/g, '\n\n').trim().slice(0, 18000);
-    app.cpEdit = null;
-    delete app.drafts['cp.raw'];
-    if (!text || text === song.sheet) { renderSheet(); return; }
-    commit([{ op: 'set', path: ['songs', song.id, 'sheet'], value: text }, ...logOps(`a fait sa version de «\u00a0${song.title}\u00a0»`, 'sheet:' + song.id)]);
-  },
-  /* Structure du morceau */
-  'part-rename'(el) {
-    const ed = app.cpEdit;
-    const r = ed && cpPart(Number(el.dataset.i));
-    if (!r) return;
-    const name = el.value.trim().slice(0, 30);
-    if (!name) { renderSheet(); return; }
-    if (r.p.head >= 0) ed.lines[r.p.head] = { sec: name };
-    else ed.lines.splice(r.from, 0, { sec: name });
-    cpSave();
-  },
-  'part-move'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    cpPartApply();
-    const n = Number(el.dataset.i), d = Number(el.dataset.v);
-    if (!cpPart(n, true) || !cpPart(n + d, true)) return;
-    const parts = cpParts(ed.lines);
-    const [x, y] = d < 0 ? [parts[n + d], parts[n]] : [parts[n], parts[n + d]];
-    const xs = ed.lines.slice(x.head, x.end), ys = ed.lines.slice(y.head, y.end);
-    if (ys.length && ys[ys.length - 1].chunks && ys[ys.length - 1].chunks.length) ys.push({ chunks: [] });
-    ed.lines.splice(x.head, y.end - x.head, ...ys, ...xs);
-    ed.colors = null;
-    cpSave();
-  },
-  'part-dup'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    cpPartApply();
-    const r = cpPart(Number(el.dataset.i), true);
-    if (!r) return;
-    const copy = JSON.parse(JSON.stringify(ed.lines.slice(r.from, r.to)));
-    if (copy.length && copy[copy.length - 1].chunks && copy[copy.length - 1].chunks.length) copy.push({ chunks: [] });
-    ed.lines.splice(r.to, 0, ...copy);
-    cpSave();
-  },
-  'part-del'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    cpPartApply();
-    const r = cpPart(Number(el.dataset.i));
-    if (!r) return;
-    ed.lines.splice(r.from, r.to - r.from);
-    ed.colors = null;
-    cpSave(`« ${frSection(r.p.label) || 'Début'} » supprimé`);
-  },
-  'part-add'(el) {
-    const ed = app.cpEdit;
-    const label = el.value;
-    el.value = '';
-    if (!ed || !label) return;
-    cpPartApply();
-    const same = cpParts(ed.lines).filter((p) => secType(p.label) === secType(label)).length;
-    const name = ['Couplet'].includes(label) ? `${label} ${same + 1}` : label;
-    while (ed.lines.length && ed.lines[ed.lines.length - 1].chunks && !ed.lines[ed.lines.length - 1].chunks.length) ed.lines.pop();
-    if (ed.lines.length) ed.lines.push({ chunks: [] });
-    ed.lines.push({ sec: name });
-    ed.part = cpParts(ed.lines).length - 1;
-    ed.sel = null;
-    app.drafts['cp.part'] = '';
-    cpSave();
-    setTimeout(() => { const t = $('#cpPart'); if (t) { t.focus(); t.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 60);
-  },
-  'part-colors'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    const n = Number(el.dataset.i);
-    ed.colors = ed.colors === n ? null : n;
-    renderSheet();
-  },
-  'part-color'(el) {
-    const ed = app.cpEdit;
-    const song = ed && D('songs')[ed.id];
-    const p = song && cpParts(ed.lines)[Number(el.dataset.i)];
-    if (!p || !SEC_COLORS[el.dataset.v]) return;
-    ed.colors = null;
-    commit([{ op: 'set', path: ['songs', song.id, 'secColors', secType(p.label)], value: el.dataset.v }]);
-  },
-  'part-text'(el) {
-    const ed = app.cpEdit;
-    if (!ed) return;
-    if (ed.part != null) { const changed = cpPartApply(); if (changed) cpSave(); }
-    const n = Number(el.dataset.i);
-    const p = cpParts(ed.lines)[n];
-    if (!p) { cpSave(); return; }
-    const shift = Number(D('songs')[ed.id].shift) || 0;
-    ed.part = n;
-    ed.sel = null;
-    app.drafts['cp.part'] = cpSerialize(cpShift(ed.lines.slice(p.start, p.end), shift)).replace(/\s+$/, '');
-    renderSheet();
-    setTimeout(() => { const t = $('#cpPart'); if (t) t.focus({ preventScroll: true }); }, 40);
-  },
-  'part-text-ok'() { if (cpPartApply()) cpSave(); else renderSheet(); },
-  'part-text-cancel'() { const ed = app.cpEdit; if (ed) { ed.part = null; delete app.drafts['cp.part']; renderSheet(); } },
   'part-jump'(el) {
     const root = el.closest('#stage') ? $('#stage') : $('#sheet');
     const sec = root && root.querySelector(`.cp-part[data-part="${el.dataset.i}"]`);
@@ -3686,13 +3404,6 @@ const actions = {
   'kara-nudge'(el) { kara.t = Math.max(0, kara.t + Number(el.dataset.v)); },
   'kara-stop'() { kara.id = null; renderSheet(); },
 
-  'cp-reset'() {
-    const ed = app.cpEdit;
-    const song = ed && D('songs')[ed.id];
-    if (!song) return;
-    app.cpEdit = null;
-    commitUndoable([{ op: 'del', path: ['songs', song.id, 'sheet'] }], 'Notre version effacée');
-  },
   'parts-edit'() {
     const song = D('songs')[app.sheet.id];
     if (!song) return;
@@ -4281,6 +3992,815 @@ document.addEventListener('pointermove', (e) => { if (drag.active) { drag.y = e.
 document.addEventListener('pointerup', dragEnd);
 document.addEventListener('pointercancel', dragEnd);
 
+/* ================= Éditeur de paroles et accords : une page à part, avec ses outils sur le côté ================= */
+// Modèle : { sec } = titre de partie ; { text, ch: [{ at, c }] } = une ligne, chaque accord posé sur un caractère.
+// Les accords sont gardés dans la tonalité d'origine et montrés dans la tona jouée.
+function edLine(chunks) {
+  let text = '';
+  const ch = [];
+  chunks.forEach((c) => { if (c.ch) ch.push({ at: text.length, c: c.ch }); text += c.tx; });
+  return { text, ch };
+}
+function edFromText(t) {
+  const doc = cpParse(t).map((l) => (l.sec != null ? { sec: l.sec } : edLine(l.chunks)));
+  // Ligne d'accords seuls : on laisse de la place entre les accords.
+  doc.forEach((l) => {
+    if (l.sec != null || l.text.trim() || !l.ch.length) return;
+    let end = 0;
+    l.ch.sort((a, b) => a.at - b.at).forEach((x) => { x.at = Math.max(x.at, end); end = x.at + x.c.length + 2; });
+    l.text = '';
+  });
+  // Les lignes vides juste avant une partie ne servent qu'à aérer : on les remet à l'enregistrement.
+  return doc.filter((l, i) => !(l.sec == null && !l.text.trim() && !l.ch.length && (i === doc.length - 1 || doc[i + 1].sec != null)));
+}
+function edLineToCP(l) {
+  let s = l.text;
+  [...l.ch].sort((a, b) => b.at - a.at).forEach(({ at, c }) => {
+    if (at > s.length) s = s.padEnd(at);
+    s = s.slice(0, at) + `[${c}]` + s.slice(at);
+  });
+  return s.replace(/\s+$/, '');
+}
+const edToText = (doc) => doc.map((l, i) => (l.sec != null ? (i ? '\n' : '') + '# ' + l.sec : edLineToCP(l))).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+const edIsText = (l) => l && l.sec == null;
+function edParts(doc) {
+  const parts = [];
+  doc.forEach((l, i) => {
+    if (l.sec != null) { parts.push({ label: l.sec, head: i, start: i + 1, end: i + 1 }); return; }
+    let cur = parts[parts.length - 1];
+    if (!cur) { cur = { label: '', head: -1, start: i, end: i }; parts.push(cur); }
+    cur.end = i + 1;
+  });
+  return parts;
+}
+const edPartOf = (doc, li) => Math.max(0, edParts(doc).findIndex((p) => li >= (p.head >= 0 ? p.head : p.start) && li < p.end));
+const edWidth = (l) => Math.max(l.text.length, ...l.ch.map((x) => x.at + x.c.length + 1)) + 3;
+// Le texte d'une ligne change : chaque accord reste sur son morceau de texte.
+function edRemap(l, next) {
+  const o = l.text;
+  let p = 0;
+  while (p < o.length && p < next.length && o[p] === next[p]) p++;
+  let s = 0;
+  while (s < o.length - p && s < next.length - p && o[o.length - 1 - s] === next[next.length - 1 - s]) s++;
+  const end = o.length - s, d = next.length - o.length;
+  const seen = new Set();
+  l.ch = l.ch.map((x) => ({ ...x, at: x.at < p ? x.at : x.at >= end ? x.at + d : p }))
+    .filter((x) => x.at >= 0 && !seen.has(x.at) && seen.add(x.at));
+  l.text = next;
+}
+function edColor(label) {
+  const ed = app.ed;
+  const k = secType(label);
+  const c = ed && ed.colors[k];
+  if (SEC_COLORS[c]) return c;
+  const t = SEC_TYPES.find(([key]) => key === k);
+  return t ? t[2] : 'sable';
+}
+// Colle une grille copiée d'un site : accords sur une ligne, paroles en dessous (ou format [Am]mot).
+const CHORD_TOKEN = /^\(?[A-G][#b♯♭]?(?:maj|min|mi|m|M|dim|aug|sus|add|°|ø|\+|-)?\d{0,2}(?:(?:sus|add|maj|b|#|\+|-)\d{1,2})*(?:\/[A-G][#b♯♭]?)?\)?$/;
+const SEC_WORD = /^(intro|outro|couplet|verse|refrain|chorus|pr[ée]-?\s?refrain|pre-?\s?chorus|post-?\s?chorus|pont|bridge|solo|interlude|break|riff|fin|coda|instrumental|hook)\b/i;
+function plainToCP(text) {
+  const src = String(text || '').replace(/\r/g, '').replace(/\t/g, '    ');
+  if (/\[ch\]/.test(src)) return ugToCP(src);
+  if (/\[[A-G][#b]?[^\]\s]{0,8}\]\S/.test(src)) return src.replace(/^\s*\[([^\]\n]{1,30})\]\s*$/gm, (m, l) => (CHORD_TOKEN.test(l) ? m : '# ' + frSection(l))).trim();
+  const out = src.split('\n').map((L) => {
+    const t = L.trim();
+    if (!t) return '';
+    const br = t.match(/^\[([^\]]{1,30})\]$/);
+    if (br && !CHORD_TOKEN.test(br[1])) return `[${br[1]}]`;
+    const lab = t.replace(/\s*:\s*$/, '').replace(/^\{(?:c|comment):\s*(.*)\}$/i, '$1');
+    if (lab.length <= 30 && SEC_WORD.test(lab) && !/\s{2,}/.test(lab) && lab.split(' ').length <= 4) return `[${lab}]`;
+    const toks = t.split(/\s+/);
+    const chordish = toks.every((x) => CHORD_TOKEN.test(x) || /^(\||\|\||-+|x\d|×\d|\(x\d\)|\/|%|\.+)$/i.test(x));
+    if (chordish && toks.some((x) => CHORD_TOKEN.test(x))) return L.replace(/\S+/g, (x) => (CHORD_TOKEN.test(x) ? `[ch]${x.replace(/[()]/g, '')}[/ch]` : x));
+    return L.replace(/\s+$/, '');
+  });
+  return ugToCP(out.join('\n'));
+}
+
+function edEl() {
+  let el = document.getElementById('editor');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'editor';
+    el.className = 'editor';
+    el.hidden = true;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Modifier les paroles et accords');
+    document.body.appendChild(el);
+    edBind(el);
+  }
+  return el;
+}
+function edOpen(song) {
+  const base = sheetBase(song);
+  const text = song.sheet || base.text || '';
+  const doc = text.trim() ? edFromText(text) : [{ sec: 'Couplet 1' }, { text: '', ch: [] }];
+  app.ed = {
+    id: song.id, doc, orig: edToText(doc), colors: { ...(song.secColors || {}) }, colorsOrig: JSON.stringify(song.secColors || {}),
+    hist: [], fut: [], li: null, word: null, part: 0, root: '', qual: '', tab: 'ajouter', raw: false, caret: 0, typing: null, tr: 0,
+    focus: text.trim() ? null : { li: 1, pos: 0 },
+  };
+  kara.id = null;
+  app.chordPop = null;
+  delete app.drafts['ed.paste'];
+  renderEditor();
+}
+function edDirty() {
+  const ed = app.ed;
+  return !!ed && (edToText(ed.doc) !== ed.orig || JSON.stringify(ed.colors) !== ed.colorsOrig);
+}
+function edPush() {
+  const ed = app.ed;
+  ed.hist.push(JSON.stringify(ed.doc));
+  if (ed.hist.length > 120) ed.hist.shift();
+  ed.fut = [];
+  ed.typing = null;
+}
+function edCloseNow() {
+  app.ed = null;
+  const el = edEl();
+  el.hidden = true;
+  el.innerHTML = '';
+  renderSheet();
+}
+function edStatus() {
+  const el = document.querySelector('#editor .ed-state');
+  if (el) el.textContent = edDirty() ? 'Non enregistré' : 'À jour';
+  const u = document.querySelector('#editor [data-act="ed-undo"]');
+  if (u) u.disabled = !app.ed.hist.length;
+}
+
+// Accords d'une ligne. Deux accords trop proches passent sur une deuxième rangée pour rester lisibles.
+function edChips(l, i, shift) {
+  const ed = app.ed;
+  const w = ed.word && ed.word.li === i ? ed.word : null;
+  const items = l.ch.map((x, k) => ({ at: x.at, k, name: transposeChord(x.c, shift) }));
+  if (w && !l.ch.some((x) => x.at === w.at)) items.push({ at: w.at, ghost: true, name: '?' });
+  items.sort((a, b) => a.at - b.at);
+  const ends = [];
+  items.forEach((it) => { let r = 0; while (ends[r] != null && it.at < ends[r]) r++; ends[r] = it.at + it.name.length + 1; it.r = r; });
+  const html = items.map((it) => (it.ghost
+    ? `<span class="ed-chip ghost" style="left:${it.at}ch;top:${it.r * 1.55}em">?</span>`
+    : `<button class="ed-chip${w && w.at === it.at ? ' sel' : ''}" data-act="ed-chip" data-li="${i}" data-k="${it.k}" style="left:${it.at}ch;top:${it.r * 1.55}em">${esc(it.name)}</button>`)).join('');
+  return { html, n: Math.max(1, ends.length) };
+}
+function edLineHtml(l, i, shift) {
+  const ed = app.ed;
+  const w = edWidth(l);
+  const c = edChips(l, i, shift);
+  return `<div class="ed-line${ed.li === i ? ' focus' : ''}" data-li="${i}">
+    <div class="ed-scroll">
+      <div class="ed-crow" data-act="ed-chord-at" data-li="${i}" data-w="${w}" style="width:${w}ch;height:${c.n * 1.55}em">${c.html}</div>
+      <input class="ed-in${l.ch.length && !l.text.trim() ? ' only' : ''}" data-li="${i}" value="${esc(l.text)}" style="width:${w}ch" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="${l.ch.length ? 'accords seuls' : 'Paroles…'}" aria-label="Ligne ${i + 1}">
+    </div>
+  </div>`;
+}
+function edDocHtml(song, shift) {
+  const ed = app.ed;
+  if (ed.raw) {
+    return `<p class="hint" style="margin-top:0"><code>[Am]mot</code> pour un accord, <code># Refrain</code> pour une partie.</p>
+      <textarea class="input ed-raw" id="edRaw" data-draft="ed.raw" spellcheck="false">${esc(draft('ed.raw'))}</textarea>`;
+  }
+  const parts = edParts(ed.doc);
+  if (!ed.doc.length) return '<p class="empty-note">Vide. Ajoute une partie avec les outils.</p>';
+  const nav = parts.filter((p) => p.head >= 0).length > 1
+    ? `<nav class="frise ed-frise">${parts.map((p, n) => (p.head >= 0 ? `<button class="fr-b" data-act="ed-part-sel" data-i="${n}" style="--sc: var(--sc-${edColor(p.label)})">${esc(frSection(p.label))}</button>` : '')).join('')}</nav>` : '';
+  return nav + parts.map((p, n) => {
+    const col = p.head >= 0 ? edColor(p.label) : 'sable';
+    const name = p.head >= 0 ? frSection(p.label) : 'Début';
+    const lines = [];
+    for (let i = p.start; i < p.end; i++) lines.push(edLineHtml(ed.doc[i], i, shift));
+    return `<section class="ed-part${n === ed.part ? ' sel' : ''}${p.head < 0 ? ' untitled' : ''}" data-part="${n}" style="--sc: var(--sc-${col})">
+      <button class="sec-chip ed-pname" data-act="ed-part-sel" data-i="${n}">${esc(name)}</button>
+      ${lines.join('')}
+      <button class="ed-plus" data-act="ed-line-add" data-li="${p.end - 1}" data-part="${n}">${ICON.plus}Ligne</button>
+    </section>`;
+  }).join('');
+}
+function edSideHtml(song, shift) {
+  const ed = app.ed;
+  const parts = edParts(ed.doc);
+  const p = parts[ed.part];
+  const line = ed.li != null && edIsText(ed.doc[ed.li]) ? ed.doc[ed.li] : null;
+  const w = ed.word;
+  const wl = w && ed.doc[w.li];
+  const cur = wl && wl.ch.find((x) => x.at === w.at);
+  const word = wl ? (wl.text.slice(w.at).match(/^\S+/) || [''])[0] : '';
+  const btn = (act, label, extra = '') => `<button class="ed-b" data-act="${act}" ${extra}>${label}</button>`;
+  const tabs = [['ajouter', 'Ajouter'], ['ligne', 'Ligne'], ['partie', 'Partie'], ['accord', 'Accord'], ['outils', 'Outils']];
+  const used = songChords(ed.doc.map((l) => (l.sec != null ? l : { chunks: l.ch.map((x) => ({ ch: x.c, tx: '' })) })), shift);
+  const online = !song.sheet ? null : (() => { const sh = app.sheets[lyricsKey(song)]; return sh && sh.state === 'ok' ? 'ug' : null; })();
+  const panels = {
+    accord: w ? `
+      <h4>${cur ? 'Changer l’accord' : 'Poser un accord'}${word ? ` <small>sur « ${esc(word)} »</small>` : ''}</h4>
+      ${used.length ? `<div class="cpp-row">${used.map((c) => `<button class="cpp-chip" data-act="ed-chord-pick" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div>` : ''}
+      <div class="cpp-grid">${CP_ROOTS.map((r) => `<button data-act="ed-root" data-v="${r}" aria-pressed="${ed.root === r}">${r}</button>`).join('')}</div>
+      <div class="cpp-grid q">${CP_QUALS.map(([v, l]) => `<button data-act="ed-qual" data-v="${v}" aria-pressed="${!!ed.root && ed.qual === v}">${l}</button>`).join('')}</div>
+      <div class="ed-free"><input class="input" id="edFree" placeholder="Autre : G/B, Asus2…" maxlength="12" data-enter="ed-free" aria-label="Accord à taper"><button class="ed-b" data-act="ed-free">OK</button></div>
+      <div class="ed-btns">
+        ${cur ? btn('ed-chip-move', '← Mot avant', 'data-v="-1"') + btn('ed-chip-move', 'Mot après →', 'data-v="1"') + btn('ed-chip-del', 'Retirer', 'data-tone="danger"') : ''}
+        ${btn('ed-word-done', 'Fermer')}
+      </div>` : '<p class="hint">Touche au-dessus d’un mot pour poser un accord. Fais glisser un accord pour le décaler.</p>',
+    ajouter: `
+      <h4>Nouvelle partie <small>${p ? `après « ${esc(p.head >= 0 ? frSection(p.label) : 'Début')} »` : ''}</small></h4>
+      <div class="ed-btns">${SEC_ADD.map((l) => `<button class="ed-b sec" data-act="ed-part-add" data-v="${l}" style="--sc: var(--sc-${edColor(l)})">${l}</button>`).join('')}</div>
+      <h4>Ligne</h4>
+      <div class="ed-btns">${btn('ed-line-add', `${ICON.plus}Ligne de paroles`)}</div>
+      <div class="ed-free"><input class="input" id="edChLine" placeholder="Ligne d’accords : Am G C D" maxlength="80" data-enter="ed-chordline" aria-label="Ligne d’accords"><button class="ed-b" data-act="ed-chordline">Ajouter</button></div>`,
+    ligne: line ? `
+      <h4>Ligne ${ed.li + 1}</h4>
+      <div class="ed-btns">
+        ${btn('ed-line-add', `${ICON.plus}Ligne dessous`)}
+        ${btn('ed-split', 'Couper au curseur')}
+        ${btn('ed-merge', 'Coller à la suivante', edIsText(ed.doc[ed.li + 1]) ? '' : 'disabled')}
+        ${btn('ed-line-dup', `${ICON.copy}Dupliquer`)}
+        ${btn('ed-line-move', `${ICON.chevUp}Monter`, `data-v="-1" ${ed.li ? '' : 'disabled'}`)}
+        ${btn('ed-line-move', `${ICON.chevDown}Descendre`, `data-v="1" ${ed.li < ed.doc.length - 1 ? '' : 'disabled'}`)}
+        ${btn('ed-line-clear', 'Enlever les accords', line.ch.length ? '' : 'disabled')}
+        ${btn('ed-line-del', `${ICON.trash}Supprimer`, 'data-tone="danger"')}
+      </div>
+      <p class="hint">Entrée coupe la ligne, Retour arrière au début la recolle à celle d’avant.</p>` : '<p class="hint">Touche une ligne pour la modifier.</p>',
+    partie: p ? `
+      <h4>Partie</h4>
+      <input class="input" value="${esc(p.head >= 0 ? frSection(p.label) : '')}" placeholder="Nom (Intro, Refrain…)" data-commit="ed-part-name" list="edSecTypes" maxlength="30" aria-label="Nom de la partie">
+      <datalist id="edSecTypes">${SEC_TYPES.map(([, l]) => `<option value="${l}">`).join('')}</datalist>
+      <div class="ed-colors">${Object.entries(SEC_COLORS).map(([k, l]) => `<button data-act="ed-part-color" data-v="${k}" style="--sc: var(--sc-${k})" aria-label="${l}" aria-pressed="${p.head >= 0 && edColor(p.label) === k}" ${p.head >= 0 ? '' : 'disabled'}></button>`).join('')}</div>
+      <p class="hint" style="margin-top:0">La couleur vaut pour tous les « ${esc(p.head >= 0 ? frSection(p.label).replace(/\s*\d+$/, '') : 'Début')} ».</p>
+      <div class="ed-btns">
+        ${btn('ed-part-dup', `${ICON.copy}Dupliquer`)}
+        ${btn('ed-part-move', `${ICON.chevUp}Monter`, `data-v="-1" ${ed.part ? '' : 'disabled'}`)}
+        ${btn('ed-part-move', `${ICON.chevDown}Descendre`, `data-v="1" ${ed.part < parts.length - 1 ? '' : 'disabled'}`)}
+        ${btn('ed-part-del', `${ICON.trash}Supprimer`, 'data-tone="danger"')}
+      </div>` : '',
+    outils: `
+      <h4>Transposer la grille</h4>
+      <div class="ed-btns">${btn('ed-transpose', '− ½ ton', 'data-v="-1"')}${btn('ed-transpose', '+ ½ ton', 'data-v="1"')}${ed.tr ? `<span class="ed-tr">${ed.tr > 0 ? '+' : '−'}${Math.abs(ed.tr)}</span>` : ''}</div>
+      <p class="hint" style="margin-top:0">Change les accords eux-mêmes. Pour jouer plus haut ou plus bas, utilise plutôt « Tona jouée ».</p>
+      <h4>Coller une grille</h4>
+      <textarea class="input ed-paste" id="edPaste" data-draft="ed.paste" spellcheck="false" placeholder="Colle ici des accords et paroles copiés d’un site (accords au-dessus des paroles)">${esc(draft('ed.paste'))}</textarea>
+      <div class="ed-btns">${btn('ed-paste', 'Ajouter à la fin', 'data-v="append"')}${btn('ed-paste', 'Tout remplacer', 'data-v="replace"')}</div>
+      <h4>Autres</h4>
+      <div class="ed-btns">
+        ${btn('ed-raw', ed.raw ? 'Revenir à l’éditeur' : 'Texte brut')}
+        ${btn('ed-clean', 'Nettoyer les lignes vides')}
+        ${online ? btn('ed-online', 'Repartir de la version en ligne') : ''}
+        ${song.sheet ? btn('ed-delete-ours', 'Effacer notre version', 'data-tone="danger"') : ''}
+      </div>`,
+  };
+  const order = ['accord', 'ajouter', 'ligne', 'partie', 'outils'];
+  return `
+    <div class="ed-tabs" role="tablist">${tabs.map(([k, l]) => `<button role="tab" data-act="ed-tab" data-v="${k}" aria-selected="${ed.tab === k}">${l}${k === 'accord' && w ? ' •' : ''}</button>`).join('')}</div>
+    <div class="ed-panels">${order.map((k) => `<section class="ed-panel${ed.tab === k ? ' on' : ''}${(k === 'accord' && !w) || (k === 'ligne' && !line) ? ' idle' : ''}" data-panel="${k}">${panels[k]}</section>`).join('')}</div>`;
+}
+function renderEditor() {
+  const ed = app.ed;
+  const el = edEl();
+  if (!ed) { el.hidden = true; return; }
+  const song = D('songs')[ed.id];
+  if (!song) { edCloseNow(); return; }
+  const shift = Number(song.shift) || 0;
+  const docEl = el.querySelector('.ed-doc');
+  const top = docEl ? docEl.scrollTop : 0;
+  const sideEl = el.querySelector('.ed-panels');
+  const sideTop = sideEl ? sideEl.scrollTop : 0;
+  el.innerHTML = `
+    <div class="ed-top">
+      <button class="ed-x" data-act="ed-close" aria-label="Fermer l’éditeur">${ICON.close}</button>
+      <div class="ed-title"><b>${esc(song.title)}</b><span class="ed-state"></span></div>
+      <button class="ed-icon" data-act="ed-undo" aria-label="Annuler" title="Annuler (Ctrl+Z)" ${ed.hist.length ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M9 7H4.5V2.5M4.8 7A8 8 0 1 1 4 13"/></svg></button>
+      <button class="ed-icon" data-act="ed-redo" aria-label="Rétablir" title="Rétablir" ${ed.fut.length ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M15 7h4.5V2.5M19.2 7A8 8 0 1 0 20 13"/></svg></button>
+      <button class="btn primary" data-act="ed-save">Enregistrer</button>
+    </div>
+    <div class="ed-body">
+      <main class="ed-doc"><div class="ed-paper">
+        ${shift ? `<p class="ed-note">Accords affichés dans la tona jouée (${shiftLabel(song)}).</p>` : ''}
+        ${edDocHtml(song, shift)}
+      </div></main>
+      <aside class="ed-side" aria-label="Outils">${edSideHtml(song, shift)}</aside>
+    </div>`;
+  el.hidden = false;
+  document.body.style.overflow = 'hidden';
+  const nd = el.querySelector('.ed-doc');
+  if (nd) nd.scrollTop = top;
+  const ns = el.querySelector('.ed-panels');
+  if (ns) ns.scrollTop = sideTop;
+  edStatus();
+  if (ed.focus) {
+    const f = ed.focus;
+    ed.focus = null;
+    const inp = el.querySelector(`.ed-in[data-li="${f.li}"]`);
+    if (inp) { inp.focus({ preventScroll: true }); inp.setSelectionRange(f.pos, f.pos); inp.closest('.ed-line').scrollIntoView({ block: 'nearest' }); }
+  }
+}
+function edRenderSide() {
+  const ed = app.ed;
+  const song = ed && D('songs')[ed.id];
+  const side = document.querySelector('#editor .ed-side');
+  if (!song || !side) return;
+  const ns = side.querySelector('.ed-panels');
+  const t = ns ? ns.scrollTop : 0;
+  side.innerHTML = edSideHtml(song, Number(song.shift) || 0);
+  const n2 = side.querySelector('.ed-panels');
+  if (n2) n2.scrollTop = t;
+}
+// Ligne choisie (sans tout redessiner, pour ne pas perdre le curseur).
+function edSelectLine(i) {
+  const ed = app.ed;
+  if (ed.li === i) return;
+  ed.li = i;
+  ed.part = edPartOf(ed.doc, i);
+  const root = document.getElementById('editor');
+  root.querySelectorAll('.ed-line.focus').forEach((x) => x.classList.remove('focus'));
+  const ln = root.querySelector(`.ed-line[data-li="${i}"]`);
+  if (ln) ln.classList.add('focus');
+  root.querySelectorAll('.ed-part.sel').forEach((x) => x.classList.remove('sel'));
+  const pt = root.querySelector(`.ed-part[data-part="${ed.part}"]`);
+  if (pt) pt.classList.add('sel');
+  if (ed.tab === 'accord' && !ed.word) ed.tab = 'ligne';
+  edRenderSide();
+}
+function edShift() { const s = app.ed && D('songs')[app.ed.id]; return (s && Number(s.shift)) || 0; }
+function edSetChord(name) {
+  const ed = app.ed;
+  const w = ed.word;
+  const l = w && ed.doc[w.li];
+  if (!l || !name) return;
+  edPush();
+  const c = transposeChord(name, -edShift());
+  const cur = l.ch.find((x) => x.at === w.at);
+  if (cur) cur.c = c; else { l.ch.push({ at: w.at, c }); l.ch.sort((a, b) => a.at - b.at); }
+  renderEditor();
+}
+function edPickWord(li, at) {
+  const ed = app.ed;
+  const l = ed.doc[li];
+  if (!edIsText(l)) return;
+  ed.word = { li, at };
+  ed.li = li;
+  ed.part = edPartOf(ed.doc, li);
+  const cur = l.ch.find((x) => x.at === at);
+  const m = cur ? transposeChord(cur.c, edShift()).match(/^([A-G](?:#|b)?)(.*)$/) : null;
+  ed.root = m ? m[1] : '';
+  ed.qual = m ? m[2] : '';
+  ed.tab = 'accord';
+  renderEditor();
+}
+// Entrées et raccourcis dans les lignes ; glisser les accords.
+function edBind(el) {
+  el.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (!app.ed) return;
+    if (t.classList.contains('ed-in')) {
+      el.classList.add('typing');
+      app.ed.typing = null;
+      edSelectLine(Number(t.dataset.li));
+    }
+  });
+  el.addEventListener('focusout', (e) => {
+    if (e.target.classList.contains('ed-in')) setTimeout(() => { if (!el.contains(document.activeElement) || !document.activeElement.classList.contains('ed-in')) el.classList.remove('typing'); }, 120);
+  });
+  const caret = (e) => { const t = e.target; if (app.ed && t.classList && t.classList.contains('ed-in')) app.ed.caret = t.selectionStart || 0; };
+  el.addEventListener('keyup', caret);
+  el.addEventListener('click', caret);
+  el.addEventListener('input', (e) => {
+    const t = e.target;
+    const ed = app.ed;
+    if (!ed || !t.classList.contains('ed-in')) return;
+    const i = Number(t.dataset.li);
+    const l = ed.doc[i];
+    if (!edIsText(l)) return;
+    if (ed.typing !== i) { edPush(); ed.typing = i; }
+    edRemap(l, t.value);
+    ed.caret = t.selectionStart || 0;
+    const w = edWidth(l);
+    t.style.width = w + 'ch';
+    const row = t.previousElementSibling;
+    row.style.width = w + 'ch';
+    row.dataset.w = w;
+    const c = edChips(l, i, edShift());
+    row.innerHTML = c.html;
+    row.style.height = c.n * 1.55 + 'em';
+    edStatus();
+  });
+  el.addEventListener('keydown', (e) => {
+    const t = e.target;
+    const ed = app.ed;
+    if (!ed || !t.classList.contains('ed-in')) return;
+    const i = Number(t.dataset.li);
+    const pos = t.selectionStart, endSel = t.selectionEnd;
+    const textIdx = (from, d) => { for (let k = from + d; k >= 0 && k < ed.doc.length; k += d) if (edIsText(ed.doc[k])) return k; return -1; };
+    if (e.key === 'Enter') { e.preventDefault(); edSplitAt(i, pos); return; }
+    if (e.key === 'Backspace' && pos === 0 && endSel === 0 && edIsText(ed.doc[i - 1])) { e.preventDefault(); edMerge(i - 1); return; }
+    if (e.key === 'Delete' && pos === t.value.length && edIsText(ed.doc[i + 1])) { e.preventDefault(); edMerge(i); return; }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const k = textIdx(i, e.key === 'ArrowUp' ? -1 : 1);
+      const nx = k >= 0 && el.querySelector(`.ed-in[data-li="${k}"]`);
+      if (nx) { e.preventDefault(); nx.focus(); const p = Math.min(pos, nx.value.length); nx.setSelectionRange(p, p); }
+    }
+  });
+  // Glisser un accord pour le décaler, caractère par caractère.
+  let dg = null;
+  el.addEventListener('pointerdown', (e) => {
+    const chip = e.target.closest('.ed-chip:not(.ghost)');
+    if (!chip || !app.ed) return;
+    const row = chip.parentElement;
+    const l = app.ed.doc[Number(chip.dataset.li)];
+    const x = l && l.ch[Number(chip.dataset.k)];
+    if (!x) return;
+    dg = { chip, x, l, x0: e.clientX, at0: x.at, cw: row.getBoundingClientRect().width / Number(row.dataset.w), snap: JSON.stringify(app.ed.doc), moved: false };
+    chip.setPointerCapture(e.pointerId);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!dg) return;
+    const n = Math.max(0, dg.at0 + Math.round((e.clientX - dg.x0) / dg.cw));
+    if (n === dg.x.at && !dg.moved) return;
+    if (!dg.moved && Math.abs(e.clientX - dg.x0) < 5) return;
+    dg.moved = true;
+    dg.chip.style.left = n + 'ch';
+    dg.chip.classList.add('drag');
+    dg.n = n;
+  });
+  const up = () => {
+    if (!dg) return;
+    const d = dg;
+    dg = null;
+    if (!d.moved) return;
+    // Le clic qui termine le glissement ne doit pas ouvrir le choix d'accord.
+    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+    window.addEventListener('click', swallow, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 80);
+    const ed = app.ed;
+    ed.hist.push(d.snap);
+    ed.fut = [];
+    d.l.ch = d.l.ch.filter((y) => y === d.x || y.at !== d.n);
+    d.x.at = d.n;
+    d.l.ch.sort((a, b) => a.at - b.at);
+    if (ed.word && ed.word.at === d.at0) ed.word.at = d.n;
+    renderEditor();
+  };
+  el.addEventListener('pointerup', up);
+  el.addEventListener('pointercancel', up);
+}
+function edSplitAt(i, pos) {
+  const ed = app.ed;
+  const l = ed.doc[i];
+  if (!edIsText(l)) return;
+  edPush();
+  // Les espaces au point de coupure restent en fin de ligne : la nouvelle ligne commence par un mot.
+  while (pos < l.text.length && /\s/.test(l.text[pos])) pos++;
+  const right = { text: l.text.slice(pos), ch: l.ch.filter((x) => x.at >= pos).map((x) => ({ ...x, at: x.at - pos })) };
+  l.ch = l.ch.filter((x) => x.at < pos);
+  l.text = l.text.slice(0, pos);
+  ed.doc.splice(i + 1, 0, right);
+  ed.word = null;
+  ed.li = i + 1;
+  ed.focus = { li: i + 1, pos: 0 };
+  renderEditor();
+}
+function edMerge(i) {
+  const ed = app.ed;
+  const a = ed.doc[i], b = ed.doc[i + 1];
+  if (!edIsText(a) || !edIsText(b)) return;
+  edPush();
+  const off = a.text.length;
+  a.ch = a.ch.concat(b.ch.map((x) => ({ ...x, at: x.at + off })));
+  a.text += b.text;
+  ed.doc.splice(i + 1, 1);
+  ed.word = null;
+  ed.li = i;
+  ed.focus = { li: i, pos: off };
+  renderEditor();
+}
+// Partie n : début (titre compris) et fin. Le début sans titre est nommé avant d'être déplacé ou copié.
+function edPartRange(n, name) {
+  const ed = app.ed;
+  let parts = edParts(ed.doc);
+  if (name && parts[n] && parts[n].head < 0) { ed.doc.splice(parts[n].start, 0, { sec: 'Début' }); parts = edParts(ed.doc); }
+  const p = parts[n];
+  return p ? { p, from: p.head >= 0 ? p.head : p.start, to: p.end, parts } : null;
+}
+const edClone = (x) => JSON.parse(JSON.stringify(x));
+const SAFE_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+Object.assign(actions, {
+  'ed-open'() { const s = D('songs')[app.sheet && app.sheet.id]; if (s) edOpen(s); },
+  async 'ed-close'() {
+    if (!app.ed) return;
+    if (edDirty() && !(await askConfirm('Quitter sans enregistrer tes changements ?', 'Quitter'))) return;
+    edCloseNow();
+  },
+  'ed-save'() {
+    const ed = app.ed;
+    const song = ed && D('songs')[ed.id];
+    if (!song) return;
+    if (ed.raw) actions['ed-raw']();
+    const text = edToText(ed.doc).slice(0, 18000);
+    const ops = [];
+    if (text && text !== (song.sheet || '')) ops.push({ op: 'set', path: ['songs', song.id, 'sheet'], value: text });
+    if (JSON.stringify(ed.colors) !== ed.colorsOrig) Object.entries(ed.colors).forEach(([k, v]) => { if (SAFE_KEY_RE.test(k)) ops.push({ op: 'set', path: ['songs', song.id, 'secColors', k], value: v }); });
+    edCloseNow();
+    if (!ops.length) return;
+    commit([...ops, ...logOps(`a modifié les paroles et accords de « ${song.title} »`, 'sheet:' + song.id)]);
+    toast('Enregistré');
+  },
+  'ed-undo'() {
+    const ed = app.ed;
+    if (!ed || !ed.hist.length) return;
+    ed.fut.push(JSON.stringify(ed.doc));
+    ed.doc = JSON.parse(ed.hist.pop());
+    ed.word = null; ed.typing = null;
+    if (ed.li != null && ed.li >= ed.doc.length) ed.li = null;
+    renderEditor();
+  },
+  'ed-redo'() {
+    const ed = app.ed;
+    if (!ed || !ed.fut.length) return;
+    ed.hist.push(JSON.stringify(ed.doc));
+    ed.doc = JSON.parse(ed.fut.pop());
+    ed.word = null; ed.typing = null;
+    if (ed.li != null && ed.li >= ed.doc.length) ed.li = null;
+    renderEditor();
+  },
+  'ed-tab'(el) { const ed = app.ed; if (!ed) return; ed.tab = el.dataset.v; document.getElementById('editor').classList.remove('typing'); edRenderSide(); },
+  'ed-part-sel'(el) {
+    const ed = app.ed;
+    if (!ed) return;
+    ed.part = Number(el.dataset.i);
+    ed.tab = 'partie';
+    document.getElementById('editor').classList.remove('typing');
+    renderEditor();
+    const sec = document.querySelector(`#editor .ed-part[data-part="${ed.part}"]`);
+    if (sec) sec.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  },
+  'ed-chord-at'(el, e) {
+    const ed = app.ed;
+    const i = Number(el.dataset.li);
+    const l = ed && ed.doc[i];
+    if (!edIsText(l)) return;
+    const cw = el.getBoundingClientRect().width / Number(el.dataset.w);
+    let at = Math.max(0, Math.floor((e.clientX - el.getBoundingClientRect().left) / cw));
+    // Dans un mot : l'accord se pose au début du mot.
+    if (at < l.text.length && /\S/.test(l.text[at])) while (at > 0 && /\S/.test(l.text[at - 1])) at--;
+    edPickWord(i, at);
+  },
+  'ed-chip'(el) { const ed = app.ed; const l = ed && ed.doc[Number(el.dataset.li)]; const x = l && l.ch[Number(el.dataset.k)]; if (x) edPickWord(Number(el.dataset.li), x.at); },
+  'ed-root'(el) { const ed = app.ed; if (!ed || !ed.word) return; ed.root = el.dataset.v; edSetChord(ed.root + ed.qual); },
+  'ed-qual'(el) { const ed = app.ed; if (!ed || !ed.word) return; ed.qual = el.dataset.v; if (ed.root) edSetChord(ed.root + ed.qual); else edRenderSide(); },
+  'ed-chord-pick'(el) {
+    const ed = app.ed;
+    if (!ed || !ed.word) return;
+    const m = el.dataset.v.match(/^([A-G](?:#|b)?)(.*)$/);
+    if (m) { ed.root = m[1]; ed.qual = m[2]; }
+    edSetChord(el.dataset.v);
+  },
+  'ed-free'() {
+    const ed = app.ed;
+    const inp = document.getElementById('edFree');
+    const v = inp ? inp.value.trim().replace(/\s+/g, '') : '';
+    if (!ed || !ed.word || !v) return;
+    if (!/^[A-G]/.test(v)) { toast('Un accord commence par une note (A à G)'); return; }
+    edSetChord(v.slice(0, 12));
+  },
+  'ed-chip-move'(el) {
+    const ed = app.ed;
+    const w = ed && ed.word;
+    const l = w && ed.doc[w.li];
+    const x = l && l.ch.find((y) => y.at === w.at);
+    if (!x) return;
+    const starts = [];
+    l.text.replace(/\S+/g, (m, k) => { starts.push(k); return m; });
+    const d = Number(el.dataset.v);
+    const to = d < 0 ? [...starts].reverse().find((k) => k < x.at) : starts.find((k) => k > x.at);
+    if (to == null || l.ch.some((y) => y.at === to)) return;
+    edPush();
+    x.at = to;
+    l.ch.sort((a, b) => a.at - b.at);
+    w.at = to;
+    renderEditor();
+  },
+  'ed-chip-del'() {
+    const ed = app.ed;
+    const w = ed && ed.word;
+    const l = w && ed.doc[w.li];
+    if (!l) return;
+    edPush();
+    l.ch = l.ch.filter((y) => y.at !== w.at);
+    ed.word = null;
+    if (ed.tab === 'accord') ed.tab = 'ligne';
+    renderEditor();
+  },
+  'ed-word-done'() { const ed = app.ed; if (!ed) return; ed.word = null; ed.tab = 'ligne'; renderEditor(); },
+  'ed-line-add'(el) {
+    const ed = app.ed;
+    if (!ed) return;
+    edPush();
+    let at = el.dataset.li != null ? Number(el.dataset.li) : ed.li;
+    if (at == null || at < 0) { const r = edPartRange(ed.part); at = r ? r.to - 1 : ed.doc.length - 1; }
+    ed.doc.splice(at + 1, 0, { text: '', ch: [] });
+    ed.li = at + 1;
+    ed.part = edPartOf(ed.doc, at + 1);
+    ed.word = null;
+    ed.focus = { li: at + 1, pos: 0 };
+    renderEditor();
+  },
+  'ed-chordline'() {
+    const ed = app.ed;
+    const inp = document.getElementById('edChLine');
+    const toks = inp ? inp.value.trim().split(/[\s,]+/).filter((x) => /^[A-G]/.test(x)).slice(0, 16) : [];
+    if (!ed || !toks.length) { toast('Tape des accords séparés par des espaces'); return; }
+    edPush();
+    let at = ed.li != null ? ed.li : (() => { const r = edPartRange(ed.part); return r ? r.to - 1 : ed.doc.length - 1; })();
+    const shift = edShift();
+    let col = 0;
+    const ch = toks.map((c) => { const x = { at: col, c: transposeChord(c, -shift) }; col += Math.max(c.length + 2, 6); return x; });
+    ed.doc.splice(at + 1, 0, { text: '', ch });
+    ed.li = at + 1;
+    ed.part = edPartOf(ed.doc, at + 1);
+    renderEditor();
+  },
+  'ed-split'() { const ed = app.ed; if (ed && ed.li != null) edSplitAt(ed.li, Math.min(ed.caret || 0, ed.doc[ed.li].text.length)); },
+  'ed-merge'() { const ed = app.ed; if (ed && ed.li != null) edMerge(ed.li); },
+  'ed-line-dup'() {
+    const ed = app.ed;
+    if (!ed || ed.li == null) return;
+    edPush();
+    ed.doc.splice(ed.li + 1, 0, edClone(ed.doc[ed.li]));
+    ed.li += 1;
+    renderEditor();
+  },
+  'ed-line-move'(el) {
+    const ed = app.ed;
+    if (!ed || ed.li == null) return;
+    const j = ed.li + Number(el.dataset.v);
+    if (j < 0 || j >= ed.doc.length) return;
+    edPush();
+    [ed.doc[ed.li], ed.doc[j]] = [ed.doc[j], ed.doc[ed.li]];
+    ed.li = j;
+    ed.part = edPartOf(ed.doc, j);
+    ed.word = null;
+    renderEditor();
+  },
+  'ed-line-clear'() { const ed = app.ed; if (!ed || ed.li == null) return; edPush(); ed.doc[ed.li].ch = []; ed.word = null; renderEditor(); },
+  'ed-line-del'() {
+    const ed = app.ed;
+    if (!ed || ed.li == null) return;
+    edPush();
+    ed.doc.splice(ed.li, 1);
+    ed.word = null;
+    ed.li = edIsText(ed.doc[ed.li]) ? ed.li : null;
+    renderEditor();
+  },
+  'ed-part-add'(el) {
+    const ed = app.ed;
+    if (!ed) return;
+    edPush();
+    const label = el.dataset.v;
+    const same = edParts(ed.doc).filter((p) => secType(p.label) === secType(label)).length;
+    const name = label === 'Couplet' ? `Couplet ${same + 1}` : label;
+    const r = edPartRange(ed.part);
+    const at = r ? r.to : ed.doc.length;
+    ed.doc.splice(at, 0, { sec: name }, { text: '', ch: [] });
+    ed.part = edPartOf(ed.doc, at);
+    ed.li = at + 1;
+    ed.word = null;
+    ed.focus = { li: at + 1, pos: 0 };
+    renderEditor();
+  },
+  'ed-part-name'(el) {
+    const ed = app.ed;
+    const name = el.value.trim().slice(0, 30);
+    if (!ed || !name) return;
+    const r = edPartRange(ed.part);
+    if (!r) return;
+    edPush();
+    if (r.p.head >= 0) ed.doc[r.p.head] = { sec: name }; else ed.doc.splice(r.from, 0, { sec: name });
+    renderEditor();
+  },
+  'ed-part-color'(el) {
+    const ed = app.ed;
+    const p = ed && edParts(ed.doc)[ed.part];
+    if (!p || p.head < 0 || !SEC_COLORS[el.dataset.v]) return;
+    ed.colors[secType(p.label)] = el.dataset.v;
+    renderEditor();
+  },
+  'ed-part-dup'() {
+    const ed = app.ed;
+    if (!ed) return;
+    edPush();
+    const r = edPartRange(ed.part, true);
+    if (!r) return;
+    ed.doc.splice(r.to, 0, ...edClone(ed.doc.slice(r.from, r.to)));
+    ed.part += 1;
+    ed.li = null;
+    renderEditor();
+  },
+  'ed-part-move'(el) {
+    const ed = app.ed;
+    if (!ed) return;
+    const n = ed.part, d = Number(el.dataset.v);
+    edPush();
+    if (!edPartRange(n, true) || !edPartRange(n + d, true)) { ed.hist.pop(); return; }
+    const parts = edParts(ed.doc);
+    const [x, y] = d < 0 ? [parts[n + d], parts[n]] : [parts[n], parts[n + d]];
+    const xs = ed.doc.slice(x.head, x.end), ys = ed.doc.slice(y.head, y.end);
+    ed.doc.splice(x.head, y.end - x.head, ...ys, ...xs);
+    ed.part = n + d;
+    ed.li = null;
+    ed.word = null;
+    renderEditor();
+  },
+  'ed-part-del'() {
+    const ed = app.ed;
+    const r = ed && edPartRange(ed.part);
+    if (!r) return;
+    edPush();
+    ed.doc.splice(r.from, r.to - r.from);
+    ed.part = Math.max(0, Math.min(ed.part, edParts(ed.doc).length - 1));
+    ed.li = null;
+    ed.word = null;
+    renderEditor();
+    toast(`« ${frSection(r.p.label) || 'Début'} » supprimé`, { label: 'Annuler', fn: () => actions['ed-undo']() });
+  },
+  'ed-transpose'(el) {
+    const ed = app.ed;
+    if (!ed) return;
+    const v = Number(el.dataset.v);
+    edPush();
+    ed.doc.forEach((l) => { if (edIsText(l)) l.ch.forEach((x) => { x.c = transposeChord(x.c, v); }); });
+    ed.tr = ((ed.tr + v + 17) % 12) - 5;
+    renderEditor();
+  },
+  'ed-paste'(el) {
+    const ed = app.ed;
+    const txt = draft('ed.paste').trim();
+    if (!ed || !txt) { toast('Colle d’abord une grille dans le cadre'); return; }
+    const add = edFromText(plainToCP(txt)).map((l) => (edIsText(l) ? { ...l, ch: l.ch.map((x) => ({ ...x, c: transposeChord(x.c, -edShift()) })) } : l));
+    if (!add.length) return;
+    edPush();
+    if (el.dataset.v === 'replace') ed.doc = add;
+    else { if (ed.doc.length) ed.doc.push({ text: '', ch: [] }); ed.doc.push(...add); }
+    delete app.drafts['ed.paste'];
+    ed.li = null; ed.word = null;
+    ed.tab = 'ajouter';
+    renderEditor();
+    toast(el.dataset.v === 'replace' ? 'Grille remplacée' : 'Grille ajoutée à la fin', { label: 'Annuler', fn: () => actions['ed-undo']() });
+  },
+  'ed-raw'() {
+    const ed = app.ed;
+    if (!ed) return;
+    const shift = edShift();
+    if (ed.raw) {
+      edPush();
+      ed.doc = edFromText(draft('ed.raw')).map((l) => (edIsText(l) ? { ...l, ch: l.ch.map((x) => ({ ...x, c: transposeChord(x.c, -shift) })) } : l));
+      ed.raw = false;
+    } else {
+      app.drafts['ed.raw'] = edToText(ed.doc.map((l) => (edIsText(l) ? { ...l, ch: l.ch.map((x) => ({ ...x, c: transposeChord(x.c, shift) })) } : l)));
+      ed.raw = true;
+    }
+    ed.li = null; ed.word = null;
+    renderEditor();
+  },
+  'ed-clean'() {
+    const ed = app.ed;
+    if (!ed) return;
+    edPush();
+    const out = [];
+    ed.doc.forEach((l) => {
+      if (edIsText(l)) {
+        l.text = l.text.replace(/\s+$/, '');
+        const blank = !l.text && !l.ch.length;
+        const prev = out[out.length - 1];
+        if (blank && (!prev || prev.sec != null || (edIsText(prev) && !prev.text && !prev.ch.length))) return;
+      }
+      out.push(l);
+    });
+    while (out.length && edIsText(out[out.length - 1]) && !out[out.length - 1].text && !out[out.length - 1].ch.length) out.pop();
+    ed.doc = out;
+    ed.li = null; ed.word = null;
+    renderEditor();
+  },
+  async 'ed-online'() {
+    const ed = app.ed;
+    const song = ed && D('songs')[ed.id];
+    const sh = song && app.sheets[lyricsKey(song)];
+    if (!sh || sh.state !== 'ok') return;
+    if (!(await askConfirm('Repartir de la grille trouvée en ligne ? Tes changements restent annulables.', 'Repartir'))) return;
+    edPush();
+    ed.doc = edFromText(sh.cp != null ? sh.cp : ugToCP(sh.content));
+    ed.li = null; ed.word = null;
+    renderEditor();
+  },
+  async 'ed-delete-ours'() {
+    const ed = app.ed;
+    const song = ed && D('songs')[ed.id];
+    if (!song || !song.sheet) return;
+    if (!(await askConfirm('Effacer votre version ? La page reprendra la grille trouvée en ligne.', 'Effacer'))) return;
+    edCloseNow();
+    commitUndoable([{ op: 'del', path: ['songs', song.id, 'sheet'] }], 'Notre version effacée');
+  },
+});
+
 /* ================= Écouteurs ================= */
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-drag-handle]')) return;
@@ -4295,6 +4815,17 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (app.ed) {
+    const k = e.key.toLowerCase();
+    if (k === 'escape') {
+      e.preventDefault();
+      if (!$('#confirm').hidden && askConfirm.cancel) { askConfirm.cancel(); return; }
+      actions['ed-close']();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && k === 's') { e.preventDefault(); actions['ed-save'](); return; }
+    if ((e.ctrlKey || e.metaKey) && k === 'z' && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) { e.preventDefault(); actions[e.shiftKey ? 'ed-redo' : 'ed-undo'](); return; }
+  }
   if (app.stage) {
     const k = e.key;
     if (k === 'Escape') { e.preventDefault(); stageExit(); return; }
